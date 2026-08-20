@@ -127,9 +127,31 @@ npm start
 ```
 
 Open your browser and navigate to:
-👉 **`http://localhost:3000`**
-
 Scan the QR code with your WhatsApp mobile app (**Linked Devices**) to start managing your chats!
+
+---
+
+## 🧠 MicroMind / Flowise Chatflow Template
+
+This repository includes the complete, production-grade **MicroMind / Flowise Chatflow Workflow template** ready to import:
+
+📁 **[`workflows/send_whatsapp_message_Chatflow.json`](workflows/send_whatsapp_message_Chatflow.json)**
+
+### ⚙️ What's Inside the Workflow:
+* **Custom AI Tools:** Built-in actions for order placement (`/api/tools/order`), appointment bookings (`/api/tools/book-appointment`), and WhatsApp messaging.
+* **HD Speech Synthesis:** Native OpenAI `tts-1-hd` voice integration (`Alloy` voice profile) for instant Voice Note generation.
+* **Conversational Memory:** Context-aware memory buffer retaining customer phone numbers, names, and session states.
+
+### 📥 How to Import & Customize:
+1. Open your **[MicroMind](https://aimicromind.com/)** or **Flowise** instance.
+2. Click on **Add New Chatflow** (or the **+** button) and select **Load / Import Chatflow**.
+3. Select the file: **[`workflows/send_whatsapp_message_Chatflow.json`](workflows/send_whatsapp_message_Chatflow.json)**.
+4. Attach your OpenAI API credentials in the credential field.
+5. Click **Save** and copy your **Prediction API URL**.
+6. Paste the URL into your `.env` file as:
+   ```env
+   MICROMIND_API_URL=https://core.aimicromind.com/api/v1/prediction/YOUR_CHATFLOW_ID
+   ```
 
 ---
 
