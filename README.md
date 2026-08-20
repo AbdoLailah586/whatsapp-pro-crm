@@ -34,7 +34,7 @@
 * **100% Mobile Playback Guarantee:** Eliminates decoding errors on iOS and Android devices, rendering native voice note waveforms and the green mic badge.
 
 ### 📊 3. Smart CRM Inbox & Reverse LID Resolution
-* **Reverse LID Identity Mapper:** Parses and resolves internal WhatsApp 15-digit LID identifiers (e.g. `249400295211224@lid`) back to real international phone numbers (e.g. `+20 11 14763069`).
+* **Reverse LID Identity Mapper:** Parses and resolves internal WhatsApp 15-digit LID identifiers (e.g. `24940xxxxxxxxxx@lid`) back to real international phone numbers (e.g. `+20 1x xxxxxxxx`).
 * **Omnichannel Chat Filters:** Fast filtering by **All**, **DMs (Private Chats)**, **WhatsApp Groups**, and customizable status tags (**New, Interested, Ordered, VIP, Support, Closed**).
 * **Deep WhatsApp Profile Inspection:** Real-time retrieval of contact profile pictures, status/bio, shared media gallery, and cross-group message activity.
 
