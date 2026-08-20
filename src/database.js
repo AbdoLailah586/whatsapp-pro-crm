@@ -387,8 +387,49 @@ class CRMDatabase {
       `);
       console.log("🐘 [Database] PostgreSQL enterprise tables initialized successfully.");
       await this.migrateLidContacts();
+      await this.mergeDuplicateContacts();
     } catch (e) {
       console.error("[Database] Error creating Postgres tables:", e.message);
+    }
+  }
+
+  async mergeDuplicateContacts() {
+    try {
+      if (this.isPostgres && this.pgPool) {
+        const res = await this.pgPool.query("SELECT * FROM contacts WHERE is_group = 0 OR is_group IS NULL");
+        const contacts = res.rows;
+        const phoneMap = new Map();
+        for (const c of contacts) {
+          if (c.jid && c.jid.endsWith("@g.us")) continue;
+          let cleanPhone = c.phone || lidMapper.resolveLidToPhone(c.jid) || (c.jid.endsWith("@s.whatsapp.net") ? c.jid.split("@")[0].replace(/\D/g, "") : "");
+          if (!cleanPhone || cleanPhone.length < 8) continue;
+          if (cleanPhone.startsWith("01") && cleanPhone.length === 11) cleanPhone = "2" + cleanPhone;
+
+          if (!phoneMap.has(cleanPhone)) phoneMap.set(cleanPhone, []);
+          phoneMap.get(cleanPhone).push(c);
+        }
+
+        for (const [phone, list] of phoneMap.entries()) {
+          if (list.length > 1) {
+            list.sort((a, b) => Number(b.last_message_time || 0) - Number(a.last_message_time || 0));
+            const primary = list[0];
+            const secondaries = list.slice(1);
+            let bestName = primary.name;
+            for (const c of list) {
+              if (c.name && c.name !== c.phone && c.name !== c.jid && !c.name.startsWith("+")) {
+                bestName = c.name;
+                break;
+              }
+            }
+            const secJids = secondaries.map(s => s.jid);
+            await this.pgPool.query("UPDATE messages SET contact_jid = $1 WHERE contact_jid = ANY($2)", [primary.jid, secJids]);
+            await this.pgPool.query("UPDATE contacts SET name = $1, phone = $2 WHERE jid = $3", [bestName, phone, primary.jid]);
+            await this.pgPool.query("DELETE FROM contacts WHERE jid = ANY($1)", [secJids]);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[Database] mergeDuplicateContacts notice:", e.message);
     }
   }
 
@@ -670,22 +711,50 @@ class CRMDatabase {
   }
 
   async getMessages(contactJid, limit = 100) {
+    if (!contactJid) return [];
+    
+    // Resolve any alternate JIDs for this contact (LID vs Phone JID)
+    const aliasJids = [contactJid];
+    const isGroup = contactJid.endsWith("@g.us");
+    if (!isGroup) {
+      const cleanPhone = lidMapper.resolveLidToPhone(contactJid) || (contactJid.endsWith("@s.whatsapp.net") ? contactJid.split("@")[0].replace(/\D/g, "") : "");
+      if (cleanPhone) {
+        aliasJids.push(`${cleanPhone}@s.whatsapp.net`);
+        if (cleanPhone.startsWith("20")) {
+          aliasJids.push(`0${cleanPhone.substring(2)}@s.whatsapp.net`);
+        } else if (cleanPhone.startsWith("01")) {
+          aliasJids.push(`2${cleanPhone}@s.whatsapp.net`);
+        }
+        const lid = lidMapper.resolvePhoneToLid(cleanPhone);
+        if (lid) {
+          aliasJids.push(`${lid}@lid`);
+        }
+      }
+    }
+
+    const uniqueJids = Array.from(new Set(aliasJids));
+
     if (this.isPostgres) {
       const res = await this.pgPool.query(`
-        SELECT * FROM messages 
-        WHERE contact_jid = $1 
-        ORDER BY timestamp ASC
-        LIMIT $2
-      `, [contactJid, limit]);
+        SELECT * FROM (
+          SELECT * FROM messages 
+          WHERE contact_jid = ANY($1) 
+          ORDER BY timestamp DESC 
+          LIMIT $2
+        ) sub ORDER BY timestamp ASC
+      `, [uniqueJids, limit]);
       return res.rows;
     }
 
+    const placeholders = uniqueJids.map(() => "?").join(",");
     return this.sqliteDb.prepare(`
-      SELECT * FROM messages 
-      WHERE contact_jid = ? 
-      ORDER BY timestamp ASC
-      LIMIT ?
-    `).all(contactJid, limit);
+      SELECT * FROM (
+        SELECT * FROM messages 
+        WHERE contact_jid IN (${placeholders}) 
+        ORDER BY timestamp DESC 
+        LIMIT ?
+      ) ORDER BY timestamp ASC
+    `).all(...uniqueJids, limit);
   }
 
   // Get all messages sent by a contact across all shared WhatsApp groups

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/index.js",
+    "push": "push_to_github.bat",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

@@ -80,6 +80,15 @@ class LidMapper {
     return userPart;
   }
 
+  resolvePhoneToLid(phone) {
+    if (!phone) return "";
+    const clean = String(phone).split("@")[0].replace(/\D/g, "");
+    if (this.phoneToLid.has(clean)) return this.phoneToLid.get(clean);
+    if (clean.startsWith("20") && this.phoneToLid.has(clean.substring(2))) return this.phoneToLid.get(clean.substring(2));
+    if (clean.startsWith("01") && this.phoneToLid.has("2" + clean)) return this.phoneToLid.get("2" + clean);
+    return "";
+  }
+
   formatPhoneNumber(phoneOrJid) {
     const raw = this.resolveLidToPhone(phoneOrJid);
     if (!raw) return "";

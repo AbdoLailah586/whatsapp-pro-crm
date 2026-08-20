@@ -35,7 +35,15 @@ whatsapp.setEventEmitter((event, data) => {
 io.on("connection", async (socket) => {
   // Send current state and CRM data to newly connected client
   try {
-    const contacts = await crmDB.getContacts();
+    const rawContacts = await crmDB.getContacts();
+    const contacts = rawContacts.map(c => {
+      const isGrp = c.is_group === 1 || (c.jid && c.jid.endsWith("@g.us"));
+      let cleanPhone = c.phone || "";
+      if (!isGrp && (!cleanPhone || cleanPhone.length >= 14 || cleanPhone.includes("@") || c.jid.endsWith("@lid"))) {
+        cleanPhone = lidMapper.resolveLidToPhone(c.phone || c.jid) || cleanPhone;
+      }
+      return { ...c, phone: cleanPhone };
+    });
     const analytics = await crmDB.getAnalytics();
     socket.emit("initial_state", {
       state: whatsapp.getState(),

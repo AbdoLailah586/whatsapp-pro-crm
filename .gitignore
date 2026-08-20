@@ -12,6 +12,11 @@ yarn-error.log*
 # Local Databases (PostgreSQL used in production)
 data/crm.db*
 
+# WhatsApp Auth & Uploads
+auth_info/
+src/public/uploads/*
+!src/public/uploads/.gitkeep
+
 # Scratch & Temporary Logs
 scratch/
 *.log

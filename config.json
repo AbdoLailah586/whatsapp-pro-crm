@@ -1,6 +1,6 @@
 {
   "port": 3000,
-  "botEnabled": false,
+  "botEnabled": true,
   "aiMode": "micromind",
   "microMindApiUrl": "https://core.aimicromind.com/api/v1/prediction/85d025b1-b637-4d44-91ef-d31ce7f292fa",
   "postgresUrl": "postgresql://neondb_owner:npg_Cpfy34RkcLbX@ep-morning-block-b20747cx-pooler.c-6.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
