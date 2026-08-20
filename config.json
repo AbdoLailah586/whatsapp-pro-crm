@@ -1,0 +1,64 @@
+{
+  "port": 3000,
+  "botEnabled": false,
+  "aiMode": "micromind",
+  "microMindApiUrl": "https://core.aimicromind.com/api/v1/prediction/85d025b1-b637-4d44-91ef-d31ce7f292fa",
+  "postgresUrl": "postgresql://neondb_owner:npg_Cpfy34RkcLbX@ep-morning-block-b20747cx-pooler.c-6.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+  "emailUser": "abdolailah586@gmail.com",
+  "emailPass": "kcnazjamytdujlkb",
+  "emailSenderName": "ReserveFlow & WhatsApp Pro",
+  "emailHost": "smtp.gmail.com",
+  "emailPort": 465,
+  "googleSheetWebhookUrl": "",
+  "autoReplyRules": [
+    {
+      "id": "1",
+      "keyword": "مرحبا",
+      "matchType": "contains",
+      "response": "أهلاً بك! 👋 كيف يمكنني مساعدتك اليوم؟",
+      "active": true
+    },
+    {
+      "id": "2",
+      "keyword": "السلام عليكم",
+      "matchType": "contains",
+      "response": "وعليكم السلام ورحمة الله وبركاته! أهلاً بحضرتك 🌸",
+      "active": true
+    },
+    {
+      "id": "3",
+      "keyword": "الاسعار",
+      "matchType": "contains",
+      "response": "قائمتنا للأسعار والخدمات تجدها عبر موقعنا، أو اترك استفسارك وسيقوم الفريق بالرد عليك فوراً.",
+      "active": true
+    },
+    {
+      "id": "4",
+      "keyword": "مواعيد العمل",
+      "matchType": "contains",
+      "response": "نعمل يومياً من الأحد إلى الخميس من 9 صباحاً حتى 6 مساءً ⏰",
+      "active": true
+    },
+    {
+      "id": "1787026862246",
+      "keyword": "اسمك ايه",
+      "matchType": "contains",
+      "response": "عبده",
+      "active": true
+    },
+    {
+      "id": "1787026886748",
+      "keyword": "اسمك",
+      "matchType": "contains",
+      "response": "عبده",
+      "active": true
+    },
+    {
+      "id": "1787202242431",
+      "keyword": "العنوان",
+      "matchType": "contains",
+      "response": "عنواننا بالتفصيل هو المنصورة شارع قناة السويس.",
+      "active": true
+    }
+  ]
+}

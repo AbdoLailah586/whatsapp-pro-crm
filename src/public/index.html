@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>منصة WhatsApp AI Pro & CRM الذكية</title>
+  <meta name="description" content="منصة متقدمة لأتمتة واتساب، خدمة العملاء بالذكاء الاصطناعي، وإدارة جهات الاتصال والحملات التسويقية">
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- App Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">
+          <i class="fa-brands fa-whatsapp"></i>
+        </div>
+        <div class="brand-text">
+          <h2>واتساب برو</h2>
+          <span class="badge-ai">AI CRM Engine</span>
+        </div>
+      </div>
+
+      <!-- WhatsApp Connection Widget -->
+      <div class="connection-status-card" id="connectionCard">
+        <div class="status-indicator-dot" id="statusDot"></div>
+        <div class="status-details">
+          <span class="status-label" id="statusLabel">جاري التحقق...</span>
+          <span class="user-phone" id="userPhone">---</span>
+        </div>
+        <button class="btn-icon-danger" id="logoutBtn" title="تسجيل الخروج" style="display: none;">
+          <i class="fa-solid fa-power-off"></i>
+        </button>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="inboxTab">
+          <i class="fa-solid fa-comments"></i>
+          <span>صندوق المحادثات (Inbox)</span>
+          <span class="badge-counter" id="inboxUnreadBadge" style="display: none;">0</span>
+        </button>
+        <button class="nav-item" data-tab="ordersTab">
+          <i class="fa-solid fa-receipt"></i>
+          <span>الطلبات والليدات (Leads)</span>
+          <span class="badge-counter count-orders" id="ordersBadge">0</span>
+        </button>
+        <button class="nav-item" data-tab="bookingsTab">
+          <i class="fa-solid fa-calendar-check"></i>
+          <span>الحجوزات والتذاكر (Bookings)</span>
+          <span class="badge-counter count-orders" id="bookingsBadge">0</span>
+        </button>
+        <button class="nav-item" data-tab="campaignsTab">
+          <i class="fa-solid fa-bullhorn"></i>
+          <span>محرك الحملات التسويقية</span>
+        </button>
+        <button class="nav-item" data-tab="analyticsTab">
+          <i class="fa-solid fa-chart-pie"></i>
+          <span>التحليلات والإحصائيات</span>
+        </button>
+        <button class="nav-item" data-tab="rulesTab">
+          <i class="fa-solid fa-robot"></i>
+          <span>قواعد الردود والذكاء الاصطناعي</span>
+        </button>
+        <button class="nav-item" data-tab="settingsTab">
+          <i class="fa-solid fa-sliders"></i>
+          <span>إعدادات النظام والربط</span>
+        </button>
+      </nav>
+
+      <!-- Global Bot Master Switch -->
+      <div class="master-bot-switch">
+        <div class="switch-info">
+          <i class="fa-solid fa-brain"></i>
+          <div>
+            <strong>المساعد الذكي (AI Bot)</strong>
+            <small id="botStatusText">مفعل للرد التلقائي</small>
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="globalBotToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+
+      <!-- QR Modal / Overlay (Shown when disconnected) -->
+      <div class="qr-overlay" id="qrOverlay" style="display: none;">
+        <div class="qr-modal-card">
+          <div class="qr-header">
+            <i class="fa-brands fa-whatsapp qr-icon-top"></i>
+            <h3>ربط حساب واتساب</h3>
+            <p>افتح تطبيق واتساب على هاتفك، اضغط على <b>الأجهزة المرتبطة</b> ثم امسح رمز الـ QR التالي:</p>
+          </div>
+          <div class="qr-box">
+            <img id="qrImage" src="" alt="WhatsApp QR Code">
+            <div class="qr-loader" id="qrLoader">
+              <div class="spinner"></div>
+              <span>جاري استخراج رمز QR جديد...</span>
+            </div>
+          </div>
+          <div class="qr-footer">
+            <p><i class="fa-solid fa-shield-halved"></i> اتصال آمن ومباشر عبر بروتوكول Baileys</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========================================== -->
+      <!-- TAB 1: Smart Inbox (WhatsApp Web CRM Style) -->
+      <!-- ========================================== -->
+      <section class="tab-panel active" id="inboxTab">
+        <div class="inbox-container">
+          
+          <!-- Contacts Column -->
+          <div class="contacts-sidebar">
+            <div class="contacts-header">
+              <div class="search-bar">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="contactSearchInput" placeholder="بحث بالاسم أو الرقم...">
+              </div>
+              <div class="tag-filter-pills">
+                <button class="pill active" data-filter="all">الكل</button>
+                <button class="pill" data-filter="dms">💬 الخاص (DMs)</button>
+                <button class="pill" data-filter="groups">👥 المجموعات (Groups)</button>
+                <button class="pill" data-filter="new">جديد</button>
+                <button class="pill" data-filter="interested">مهتم</button>
+                <button class="pill" data-filter="ordered">طلب شراء</button>
+                <button class="pill" data-filter="vip">VIP</button>
+                <button class="pill" data-filter="support">دعم</button>
+              </div>
+            </div>
+
+            <!-- Contacts Scroll List -->
+            <div class="contacts-list" id="contactsList">
+              <div class="empty-state">
+                <i class="fa-regular fa-comments"></i>
+                <p>لا توجد محادثات مسجلة بعد</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chat Window Column -->
+          <div class="chat-window" id="chatWindow">
+            
+            <!-- Chat Placeholder (No chat selected) -->
+            <div class="chat-empty-view" id="chatEmptyView">
+              <div class="empty-illustration">
+                <div class="glow-circle">
+                  <i class="fa-brands fa-whatsapp"></i>
+                </div>
+                <h3>منصة واتساب برو الذكية</h3>
+                <p>اختر محادثة من القائمة الجانبية للبدء في المتابعة، أو التدخل البشري والرد على العميل.</p>
+                <div class="features-chips">
+                  <span><i class="fa-solid fa-user-shield"></i> تدخل بشري بضغطة زر</span>
+                  <span><i class="fa-solid fa-microphone-lines"></i> ردود صوتية بالذكاء الاصطناعي</span>
+                  <span><i class="fa-solid fa-tags"></i> تصنيف تلقائي للعملاء</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Active Chat Interface -->
+            <div class="chat-active-view" id="chatActiveView" style="display: none;">
+              
+              <!-- Chat Header -->
+              <header class="chat-header">
+                <div class="chat-user-info">
+                  <div class="avatar" id="activeChatAvatar">ع</div>
+                  <div>
+                    <h4 id="activeChatName">اسم العميل</h4>
+                    <span class="chat-phone" id="activeChatPhone">+201000000000</span>
+                  </div>
+                </div>
+
+                <div class="chat-header-actions">
+                  <!-- Tag Selector -->
+                  <div class="tag-selector-wrap">
+                    <label>التصنيف:</label>
+                    <select id="activeChatTagSelect">
+                      <option value="new">🆕 جديد (New)</option>
+                      <option value="interested">⭐ مهتم (Interested)</option>
+                      <option value="ordered">🛍️ طلب شراء (Ordered)</option>
+                      <option value="vip">💎 VIP</option>
+                      <option value="support">🛠️ دعم فني (Support)</option>
+                      <option value="closed">🔒 مغلق (Closed)</option>
+                    </select>
+                  </div>
+
+                  <!-- Human Takeover Switch -->
+                  <div class="takeover-box" title="إيقاف ردود الذكاء الاصطناعي لهذه المحادثة للتحدث يدوياً">
+                    <div class="takeover-text">
+                      <span class="takeover-title"><i class="fa-solid fa-hand"></i> تدخل بشري</span>
+                      <small id="takeoverStatusText">البوت نشط</small>
+                    </div>
+                    <label class="toggle-switch small">
+                      <input type="checkbox" id="takeoverToggle">
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+
+                  <!-- Edit Contact Profile Button -->
+                  <button class="btn-secondary btn-sm" id="editContactBtn" title="تعديل اسم ورقم وبيانات العميل">
+                    <i class="fa-solid fa-user-pen"></i>
+                  </button>
+
+                  <!-- View Full Contact Profile Button -->
+                  <button class="btn-secondary btn-sm" id="viewContactProfileBtn" title="عرض تفاصيل ومعلومات العميل الكاملة (مثل الواتس)">
+                    <i class="fa-solid fa-circle-info"></i>
+                  </button>
+
+                  <!-- Custom Notes Button -->
+                  <button class="btn-secondary btn-sm" id="chatNotesBtn" title="ملاحظات العميل">
+                    <i class="fa-solid fa-note-sticky"></i>
+                  </button>
+                </div>
+              </header>
+
+              <!-- Chat Messages Container -->
+              <div class="messages-container" id="messagesContainer">
+                <!-- Messages dynamic load -->
+              </div>
+
+              <!-- Chat Input Bar -->
+              <footer class="chat-input-bar">
+                <div class="quick-replies-menu">
+                  <select id="quickRepliesSelect">
+                    <option value="">⚡ ردود سريعة جاهزة...</option>
+                    <option value="أهلاً بك يا فندم! يسعدنا تواصلك معنا، كيف نقدر نساعدك اليوم؟">ترحيب عام</option>
+                    <option value="تم استلام طلبك بنجاح وجاري تجهيزه للشحن، سيصلك مندوبنا خلال 48 ساعة.">تأكيد استلام الطلب</option>
+                    <option value="سعر المنتج الحالي 350 جنيه شامل الشحن لجميع المحافظات.">عرض السعر والشحن</option>
+                    <option value="متاح الدفع عند الاستلام أو عبر فودافون كاش / انستاباي.">طرق الدفع</option>
+                  </select>
+                </div>
+
+                <div class="input-actions-row">
+                  <textarea id="chatTextInput" rows="1" placeholder="اكتب رسالتك هنا... (أو اضغط زر المايك للرد الصوتي)"></textarea>
+                  
+                  <!-- Voice Note Send Button -->
+                  <button class="btn-voice" id="sendVoiceBtn" title="إرسال رسالة صوتية ناطقة باللغة العربية (Voice Note)">
+                    <i class="fa-solid fa-microphone"></i>
+                  </button>
+
+                  <!-- Send Text Button -->
+                  <button class="btn-send" id="sendTextBtn" title="إرسال">
+                    <i class="fa-solid fa-paper-plane"></i>
+                  </button>
+                </div>
+              </footer>
+
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 2: Leads & Orders Management -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="ordersTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-receipt"></i> إدارة الطلبات والليدات</h2>
+            <p>الطلبات والبيانات المسجلة تلقائياً عبر الذكاء الاصطناعي أو اليدوية، مع إمكانية المزامنة مع Google Sheets.</p>
+          </div>
+          <button class="btn-primary" id="addNewOrderBtn">
+            <i class="fa-solid fa-plus"></i> تسجيل طلب يدوي
+          </button>
+        </div>
+
+        <div class="data-table-card">
+          <table class="custom-table" id="ordersTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>اسم العميل</th>
+                <th>رقم الهاتف</th>
+                <th>تفاصيل الطلب / الاستفسار</th>
+                <th>العنوان</th>
+                <th>المبلغ</th>
+                <th>الحالة</th>
+                <th>Google Sheets</th>
+                <th>التاريخ</th>
+                <th>إجراءات</th>
+              </tr>
+            </thead>
+            <tbody id="ordersTableBody">
+              <tr>
+                <td colspan="10" class="text-center">جاري تحميل الطلبات...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB: ReserveFlow Bookings & Appointments -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="bookingsTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-calendar-check"></i> إدارة الحجوزات والمواعيد (ReserveFlow)</h2>
+            <p>المواعيد والاستشارات المسجلة تلقائياً عبر الذكاء الاصطناعي والمزامنة مع Google Calendar و Google Sheets.</p>
+          </div>
+          <button class="btn-primary" id="openNewBookingModalBtn">
+            <i class="fa-solid fa-plus"></i> حجز موعد جديد
+          </button>
+        </div>
+
+        <div class="data-table-card">
+          <table class="custom-table" id="bookingsTable">
+            <thead>
+              <tr>
+                <th>كود التذكرة</th>
+                <th>اسم العميل</th>
+                <th>رقم الهاتف</th>
+                <th>البريد الإلكتروني</th>
+                <th>تاريخ وتوقيت الموعد</th>
+                <th>الحالة</th>
+                <th>ملاحظات</th>
+                <th>التاريخ</th>
+                <th>إجراءات</th>
+              </tr>
+            </thead>
+            <tbody id="bookingsTableBody">
+              <tr>
+                <td colspan="9" class="text-center">جاري تحميل الحجوزات...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 3: Broadcast & Marketing Campaigns -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="campaignsTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-bullhorn"></i> محرك الحملات التسويقية والرسائل الجماعية</h2>
+            <p>إرسال رسائل جماعية مخصصة لقوائم العملاء مع ميزة الفواصل الزمنية العشوائية لتجنب حظر الأرقام.</p>
+          </div>
+        </div>
+
+        <div class="campaign-grid">
+          <!-- Campaign Creator -->
+          <div class="card campaign-card">
+            <h3><i class="fa-solid fa-paper-plane"></i> إنشاء حملة جديدة</h3>
+            
+            <div class="form-group">
+              <label>عنوان الحملة:</label>
+              <input type="text" id="campaignTitle" placeholder="مثال: عرض خصم نهاية الأسبوع">
+            </div>
+
+            <div class="form-group">
+              <label>استهداف الجمهور:</label>
+              <select id="campaignAudienceSelect">
+                <option value="all">كل جهات الاتصال المسجلة في الـ CRM</option>
+                <option value="interested">العملاء المهتمين فقط (Interested)</option>
+                <option value="ordered">العملاء الذين اشتروا مسبقاً (Ordered)</option>
+                <option value="vip">عملاء الـ VIP فقط</option>
+                <option value="custom">أرقام هواتف مخصصة (لصق يدوي)</option>
+              </select>
+            </div>
+
+            <div class="form-group" id="customNumbersGroup" style="display: none;">
+              <label>أرقام الهواتف (رقم في كل سطر أو مفصولة بفواصل):</label>
+              <textarea id="campaignCustomNumbers" rows="4" placeholder="201012345678&#10;201123456789"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>نص الرسالة (يمكنك استخدام المتغيرات <code>{name}</code> و <code>{phone}</code>):</label>
+              <textarea id="campaignTemplate" rows="4" placeholder="أهلاً بك يا {name}، خصم 20% خاص لك اليوم على جميع خدماتنا!"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>الفاصل الزمني بين الرسائل (حماية من الحظر):</label>
+              <div class="range-wrap">
+                <input type="number" id="campaignDelay" value="8" min="3" max="60"> ثواني
+                <small class="hint">يتم إضافة تفاوت عشوائي (+/- 3 ثواني) لتقليد السلوك البشري الطبيعي.</small>
+              </div>
+            </div>
+
+            <button class="btn-primary btn-block" id="startCampaignBtn">
+              <i class="fa-solid fa-rocket"></i> إطلاق الحملة الآن
+            </button>
+
+            <!-- Campaign Live Progress -->
+            <div class="campaign-progress-box" id="campaignProgressBox" style="display: none;">
+              <div class="progress-info">
+                <span id="campaignProgressText">جاري الإرسال: 0 / 0</span>
+                <span id="campaignProgressPercent">0%</span>
+              </div>
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="campaignProgressBar" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Campaign History -->
+          <div class="card history-card">
+            <h3><i class="fa-solid fa-clock-rotate-left"></i> سجل الحملات السابقة</h3>
+            <div class="campaigns-history-list" id="campaignsHistoryList">
+              <div class="empty-state">
+                <p>لم يتم إطلاق أي حملات بعد.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 4: Analytics & Insights -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="analyticsTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-chart-pie"></i> لوحة التحليلات والإحصائيات الحية</h2>
+            <p>متابعة تفاعل العملاء، كفاءة الرد التلقائي، ومعدل تحويل الليدات والطلبات.</p>
+          </div>
+          <button class="btn-secondary" id="refreshAnalyticsBtn">
+            <i class="fa-solid fa-rotate"></i> تحديث
+          </button>
+        </div>
+
+        <!-- Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-icon icon-blue"><i class="fa-solid fa-users"></i></div>
+            <div class="metric-data">
+              <span class="metric-title">إجمالي العملاء</span>
+              <h3 id="statTotalContacts">0</h3>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon icon-green"><i class="fa-solid fa-message"></i></div>
+            <div class="metric-data">
+              <span class="metric-title">إجمالي الرسائل</span>
+              <h3 id="statTotalMessages">0</h3>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon icon-purple"><i class="fa-solid fa-robot"></i></div>
+            <div class="metric-data">
+              <span class="metric-title">ردود الذكاء الاصطناعي</span>
+              <h3 id="statTotalAutoReplies">0</h3>
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-icon icon-amber"><i class="fa-solid fa-bag-shopping"></i></div>
+            <div class="metric-data">
+              <span class="metric-title">الطلبات المسجلة</span>
+              <h3 id="statTotalOrders">0</h3>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3><i class="fa-solid fa-chart-line"></i> نشاط الرسائل خلال آخر 7 أيام</h3>
+            <div class="chart-wrapper">
+              <canvas id="messagesActivityChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3><i class="fa-solid fa-chart-pie"></i> توزيع تصنيفات العملاء (CRM Tags)</h3>
+            <div class="chart-wrapper">
+              <canvas id="tagsDistributionChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 5: AI Rules & Automation -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="rulesTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-robot"></i> قواعد الردود التلقائية</h2>
+            <p>إدارة الكلمات المفتاحية والردود السريعة المباشرة، مع دعم الذكاء الاصطناعي في حالة عدم مطابقة أي قاعدة.</p>
+          </div>
+          <button class="btn-primary" id="openAddRuleModalBtn">
+            <i class="fa-solid fa-plus"></i> إضافة قاعدة رد
+          </button>
+        </div>
+
+        <div class="rules-list" id="rulesContainer">
+          <!-- Dynamic rules -->
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 6: Settings & Integrations -->
+      <!-- ========================================== -->
+      <section class="tab-panel" id="settingsTab">
+        <div class="panel-header">
+          <div>
+            <h2><i class="fa-solid fa-sliders"></i> إعدادات المنظومة والتكاملات</h2>
+            <p>ربط قنوات التكامل الخارجي (MicroMind, Google Sheets, Neon PostgreSQL, Cloudflare Tunnel).</p>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <div class="card settings-card">
+            <h3><i class="fa-solid fa-bolt"></i> التكامل مع MicroMind & Cloudflare Tunnel</h3>
+            <div class="integration-item">
+              <span class="item-label">رابط Webhook لتسجيل الطلبات والليدات (Tool):</span>
+              <div class="code-copy-box">
+                <code id="tunnelOrderWebhookUrl">https://.../api/tools/order</code>
+                <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('tunnelOrderWebhookUrl').innerText)"><i class="fa-solid fa-copy"></i></button>
+              </div>
+            </div>
+
+            <div class="integration-item">
+              <span class="item-label">رابط Webhook للردود الصوتية (Voice Tool):</span>
+              <div class="code-copy-box">
+                <code id="tunnelVoiceWebhookUrl">https://.../api/tools/voice</code>
+                <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('tunnelVoiceWebhookUrl').innerText)"><i class="fa-solid fa-copy"></i></button>
+              </div>
+            </div>
+
+            <div class="integration-item">
+              <span class="item-label">رابط Webhook لحجز المواعيد والتذاكر (Booking Tool):</span>
+              <div class="code-copy-box">
+                <code id="tunnelBookingWebhookUrl">https://.../api/tools/book-appointment</code>
+                <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('tunnelBookingWebhookUrl').innerText)"><i class="fa-solid fa-copy"></i></button>
+              </div>
+            </div>
+          </div>
+
+          <!-- MicroMind Workflow Tools Status Card -->
+          <div class="card settings-card">
+            <h3><i class="fa-solid fa-wand-magic-sparkles"></i> أدوات وتكاملات MicroMind Workflow</h3>
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 15px;">
+              <div class="integration-item">
+                <span class="item-label"><i class="fa-solid fa-table"></i> أداة Google Sheets (جداول البيانات):</span>
+                <p style="color: var(--accent-cyan); font-size: 0.85rem; margin: 4px 0 0 0;">
+                  <i class="fa-solid fa-circle-check"></i> متصلة وجاهزة - يتم تسجيل الطلبات والليدات والحجوزات فورياً عبر الورك فلو.
+                </p>
+              </div>
+
+              <div class="integration-item">
+                <span class="item-label"><i class="fa-solid fa-envelope"></i> أداة البريد الإلكتروني (Gmail Notifier):</span>
+                <p style="color: var(--accent-cyan); font-size: 0.85rem; margin: 4px 0 0 0;">
+                  <i class="fa-solid fa-circle-check"></i> متصلة وجاهزة - يتم إرسال إيميل التذكرة وتأكيد الحجز فوراً عبر الورك فلو.
+                </p>
+              </div>
+
+              <div class="integration-item">
+                <span class="item-label"><i class="fa-solid fa-calendar-days"></i> أداة تقويم جوجل (Google Calendar):</span>
+                <p style="color: var(--accent-cyan); font-size: 0.85rem; margin: 4px 0 0 0;">
+                  <i class="fa-solid fa-circle-check"></i> متصلة وجاهزة - فحص المواعيد المتاحة وجدولة المقابلات.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card settings-card">
+            <h3><i class="fa-solid fa-database"></i> خيارات قاعدة البيانات (Database)</h3>
+            <div class="db-status-box">
+              <p>تدعم المنظومة تلقائياً كلاً من <b>SQLite المحلية</b> أو سحابة <b>Neon PostgreSQL</b> مع مزامنة لحظية.</p>
+              <div class="status-badge-inline" id="dbStatusBadge">
+                <i class="fa-solid fa-database"></i> Neon PostgreSQL Active (Cloud)
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Contact Profile Details Modal (Popup Window) -->
+  <div class="modal-overlay" id="contactProfileModal" style="display: none;">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-circle-user"></i> بيانات وتفاصيل العميل</h3>
+        <button class="btn-close" id="closeContactProfileModalBtn">&times;</button>
+      </div>
+      <div class="modal-body custom-scroll" style="max-height: 72vh; overflow-y: auto; padding: 16px 20px;">
+        
+        <!-- Large Avatar & Name -->
+        <div class="drawer-hero" style="border-bottom: 1px solid var(--border-color); padding-bottom: 14px; margin-bottom: 14px;">
+          <div class="drawer-avatar-wrap">
+            <div class="drawer-avatar" id="drawerAvatar">
+              <span id="drawerAvatarLetter">ع</span>
+              <img id="drawerAvatarImg" src="" alt="صورة العميل" style="display: none;" />
+            </div>
+          </div>
+          <h3 id="drawerName" class="drawer-user-name">اسم العميل</h3>
+          <div class="drawer-phone-badge" id="drawerPhone">+201000000000</div>
+          
+          <div class="drawer-bio-box" id="drawerBioBox">
+            <i class="fa-solid fa-quote-right"></i>
+            <span id="drawerBio">متاح على واتساب</span>
+          </div>
+        </div>
+
+        <!-- Group Specific View (يظهر فقط عند فتح تفاصيل مجموعة) -->
+        <div id="groupProfileSection" style="display: none;">
+          <!-- Group Description -->
+          <div class="drawer-card" style="margin-bottom: 12px;" id="groupDescCard">
+            <div class="drawer-card-title"><i class="fa-solid fa-align-right"></i> وصف المجموعة (Group Description)</div>
+            <p id="groupDescText" style="color: var(--text-main); font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; margin: 0;">لا يوجد وصف مسجل للمجموعة</p>
+          </div>
+
+          <!-- Group Participants Explorer -->
+          <div class="drawer-card" style="margin-bottom: 12px;">
+            <div class="drawer-card-title">
+              <span><i class="fa-solid fa-users"></i> أعضاء المجموعة (Group Participants)</span>
+              <span class="badge-count" id="groupMembersCountBadge">0</span>
+            </div>
+            
+            <div class="group-members-search-wrap" style="margin: 8px 0 10px 0;">
+              <div class="search-bar" style="width: 100%;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="groupMemberSearchInput" placeholder="بحث في أسماء وأرقام الأعضاء...">
+              </div>
+            </div>
+
+            <div id="groupMembersList" class="group-members-list-scroll">
+              <p class="drawer-empty-hint">جاري تحميل قائمة الأعضاء...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Individual Contact View (يظهر فقط مع المحادثات الفردية) -->
+        <div id="individualProfileSection">
+          <!-- Quick Action Buttons -->
+          <div class="drawer-actions-grid" style="margin-bottom: 14px;">
+            <a href="#" target="_blank" id="drawerWhatsAppLink" class="drawer-action-btn wa-btn">
+              <i class="fa-brands fa-whatsapp"></i>
+              <span>فتح في تطبيق واتساب</span>
+            </a>
+            <button class="drawer-action-btn edit-btn" id="drawerEditBtn">
+              <i class="fa-solid fa-user-pen"></i>
+              <span>تعديل بيانات العميل</span>
+            </button>
+          </div>
+
+          <!-- CRM Stats -->
+          <div class="drawer-card" style="margin-bottom: 12px;">
+            <div class="drawer-card-title"><i class="fa-solid fa-chart-simple"></i> ملخص التعاملات والنشاط</div>
+            <div class="drawer-stats-row">
+              <div class="drawer-stat-item">
+                <small>التصنيف</small>
+                <span id="drawerTagBadge" class="tag-badge new">جديد</span>
+              </div>
+              <div class="drawer-stat-item">
+                <small>إجمالي الطلبات</small>
+                <strong id="drawerOrdersCount">0</strong>
+              </div>
+              <div class="drawer-stat-item">
+                <small>إجمالي المشتريات</small>
+                <strong id="drawerTotalSpent">0 ج.م</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Location & Notes -->
+          <div class="drawer-card" style="margin-bottom: 12px;">
+            <div class="drawer-card-title"><i class="fa-solid fa-location-dot"></i> العنوان والملاحظات</div>
+            <div class="drawer-field">
+              <label>📍 العنوان:</label>
+              <p id="drawerAddress">غير محدد</p>
+            </div>
+            <div class="drawer-field">
+              <label>📝 الملاحظات:</label>
+              <p id="drawerNotes">لا توجد ملاحظات مسجلة</p>
+            </div>
+          </div>
+
+          <!-- Registered Orders -->
+          <div class="drawer-card" style="margin-bottom: 12px;">
+            <div class="drawer-card-title">
+              <span><i class="fa-solid fa-boxes-stacked"></i> الطلبات والخدمات المسجلة</span>
+              <span class="badge-count" id="drawerOrdersTotalBadge">0</span>
+            </div>
+            <div id="drawerOrdersList" class="drawer-list-items">
+              <p class="drawer-empty-hint">لا توجد طلبات مسجلة</p>
+            </div>
+          </div>
+
+          <!-- Bookings / Appointments -->
+          <div class="drawer-card" style="margin-bottom: 12px;">
+            <div class="drawer-card-title">
+              <span><i class="fa-solid fa-calendar-check"></i> المواعيد والاستشارات</span>
+              <span class="badge-count" id="drawerBookingsTotalBadge">0</span>
+            </div>
+            <div id="drawerBookingsList" class="drawer-list-items">
+              <p class="drawer-empty-hint">لا توجد مواعيد مسجلة</p>
+            </div>
+          </div>
+
+          <!-- Shared Groups Messages (نشاط ورسائل العضو في الجروبات المشتركة) -->
+          <div class="drawer-card" style="margin-bottom: 12px;" id="drawerGroupMsgsCard">
+            <div class="drawer-card-title">
+              <span><i class="fa-solid fa-users-viewfinder"></i> رسائل العضو في الجروبات المشتركة</span>
+              <span class="badge-count" id="drawerGroupMsgsTotalBadge">0</span>
+            </div>
+            <div id="drawerGroupMsgsList" class="drawer-list-items">
+              <p class="drawer-empty-hint">لا توجد رسائل لهذا العضو في الجروبات المشتركة</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shared Media Gallery -->
+        <div class="drawer-card">
+          <div class="drawer-card-title">
+            <span><i class="fa-solid fa-photo-film"></i> الوسائط والمستندات المشتركة</span>
+            <span class="badge-count" id="drawerMediaTotalBadge">0</span>
+          </div>
+          <div id="drawerMediaGallery" class="drawer-media-grid">
+            <p class="drawer-empty-hint">لا توجد وسائط مرسلة</p>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelContactProfileBtn">إغلاق</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Contact Modal -->
+  <div class="modal-overlay" id="editContactModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-user-pen"></i> تعديل بيانات وملف العميل</h3>
+        <button class="btn-close" id="closeEditContactModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>اسم العميل المحفوظ:</label>
+          <input type="text" id="editContactName" placeholder="مثال: أ/ عبدالله">
+        </div>
+        <div class="form-group">
+          <label>رقم الهاتف الحقيقي:</label>
+          <input type="text" id="editContactPhone" placeholder="مثال: 01558909252">
+        </div>
+        <div class="form-group">
+          <label>تصنيف العميل:</label>
+          <select id="editContactTag">
+            <option value="new">🆕 جديد (New)</option>
+            <option value="interested">⭐ مهتم (Interested)</option>
+            <option value="ordered">🛍️ طلب شراء (Ordered)</option>
+            <option value="vip">💎 VIP</option>
+            <option value="support">🛠️ دعم فني (Support)</option>
+            <option value="closed">🔒 مغلق (Closed)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>المدينة / المحافظة:</label>
+          <input type="text" id="editContactCity" placeholder="مثال: القاهرة / الجيزة">
+        </div>
+        <div class="form-group">
+          <label>العنوان بالتفصيل:</label>
+          <input type="text" id="editContactAddress" placeholder="مثال: المعادي - شارع النصر">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات إضافية:</label>
+          <textarea id="editContactNotes" rows="3" placeholder="اكتب ملاحظاتك عن العميل..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelEditContactBtn">إلغاء</button>
+        <button class="btn-primary" id="saveEditContactBtn"><i class="fa-solid fa-floppy-disk"></i> حفظ التعديلات</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notes Modal -->
+  <div class="modal-overlay" id="notesModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-note-sticky"></i> ملاحظات العميل</h3>
+        <button class="btn-close" id="closeNotesModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="contactNotesTextarea" rows="6" placeholder="اكتب أي ملاحظات خاصة بهذا العميل (الاهتمامات، تاريخ التعاملات، العناوين المفضلة...)..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelNotesBtn">إلغاء</button>
+        <button class="btn-primary" id="saveNotesBtn">حفظ الملاحظات</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Order Modal -->
+  <div class="modal-overlay" id="addOrderModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-plus-circle"></i> تسجيل طلب / عميل محتمل جديد</h3>
+        <button class="btn-close" id="closeAddOrderModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>اسم العميل:</label>
+          <input type="text" id="newOrderName" placeholder="أحمد محمد">
+        </div>
+        <div class="form-group">
+          <label>رقم الهاتف:</label>
+          <input type="text" id="newOrderPhone" placeholder="01012345678">
+        </div>
+        <div class="form-group">
+          <label>تفاصيل الطلب أو الخدمة:</label>
+          <textarea id="newOrderDetails" rows="2" placeholder="طلب 2 قطع من منتج X"></textarea>
+        </div>
+        <div class="form-group">
+          <label>العنوان:</label>
+          <input type="text" id="newOrderAddress" placeholder="القاهرة - المعادي">
+        </div>
+        <div class="form-group">
+          <label>المبلغ الإجمالي:</label>
+          <input type="text" id="newOrderPrice" placeholder="500 EGP">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelAddOrderBtn">إلغاء</button>
+        <button class="btn-primary" id="submitAddOrderBtn">تسجيل الطلب ومزامنته</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Booking Modal -->
+  <div class="modal-overlay" id="addBookingModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-calendar-plus"></i> حجز موعد جديد (ReserveFlow)</h3>
+        <button class="btn-close" id="closeAddBookingModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>اسم العميل:</label>
+          <input type="text" id="newBookingName" placeholder="مثال: سارة أحمد">
+        </div>
+        <div class="form-group">
+          <label>رقم الهاتف (واتساب):</label>
+          <input type="text" id="newBookingPhone" placeholder="01012345678">
+        </div>
+        <div class="form-group">
+          <label>البريد الإلكتروني (لتأكيد الحجز والإشعار):</label>
+          <input type="email" id="newBookingEmail" placeholder="sara@example.com">
+        </div>
+        <div class="form-group">
+          <label>تاريخ الموعد:</label>
+          <input type="date" id="newBookingDate">
+        </div>
+        <div class="form-group">
+          <label>المواعيد المتاحة في هذا اليوم:</label>
+          <select id="newBookingSlotSelect">
+            <option value="">اختر تاريخاً أولاً لعرض المواعيد المتاحة...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>ملاحظات إضافية:</label>
+          <textarea id="newBookingNotes" rows="2" placeholder="موضوع الاستشارة أو تفاصيل الحجز..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelAddBookingBtn">إلغاء</button>
+        <button class="btn-primary" id="submitAddBookingBtn">تأكيد الحجز وإرسال التذكرة</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- Add Rule Modal -->
+  <div class="modal-overlay" id="addRuleModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-plus"></i> إضافة قاعدة رد تلقائي</h3>
+        <button class="btn-close" id="closeAddRuleModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>الكلمة المفتاحية أو العبارة:</label>
+          <input type="text" id="ruleKeyword" placeholder="مثال: الأسعار، العنوان، المواعيد">
+        </div>
+        <div class="form-group">
+          <label>نوع المطابقة:</label>
+          <select id="ruleMatchType">
+            <option value="contains">تحتوي الكلمة (Contains)</option>
+            <option value="exact">مطابقة تامة (Exact Match)</option>
+            <option value="startsWith">تبدأ بـ (Starts With)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>نص الرد التلقائي:</label>
+          <textarea id="ruleResponse" rows="4" placeholder="اكتب نص الرد الذي سيتم إرساله للعميل فوراً..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelAddRuleBtn">إلغاء</button>
+        <button class="btn-primary" id="submitAddRuleBtn">حفظ القاعدة</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
