@@ -7,7 +7,7 @@ FROM node:20-bookworm-slim
 
 # Set environment
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=5000
 
 # Install FFmpeg and build essentials for audio processing (Opus PTT)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -34,7 +34,7 @@ COPY . .
 RUN mkdir -p data auth_info src/public/uploads
 
 # Expose web application port
-EXPOSE 3000
+EXPOSE 5000
 
 # Start server
 CMD ["node", "src/index.js"]

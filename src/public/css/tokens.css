@@ -1,0 +1,234 @@
+/* ==========================================================================
+   WhatsApp Pro CRM — Design Tokens
+   نظام واحد بثلاث طبقات:
+     Light  = "Quiet Ink"      (A)  — الافتراضي، للاستخدام اليومي الطويل
+     Dark   = "Nocturne"       (B)  — نفس النظام بقيم ليلية
+     Bento  = طبقة تخطيط في app.css تستخدم نفس الـ tokens دي
+   كل لون في الواجهة لازم يجي من هنا. ممنوع أي hex في app.css.
+   ========================================================================== */
+
+:root {
+  /* ---------- Surfaces ---------- */
+  --bg:            #FBFBFA;
+  --surface:       #FFFFFF;
+  --surface-2:     #F6F7F4;
+  --surface-3:     #EFF1EC;
+  --sunken:        #F2F3F0;
+  --overlay:       rgba(21, 24, 28, .34);
+
+  /* ---------- Text ---------- */
+  --ink:           #15181C;
+  --ink-2:         #39423C;
+  --muted:         #616A63;
+  --faint:         #99A29B;
+
+  /* ---------- Lines ---------- */
+  --line:          #E4E6E1;
+  --line-2:        #EDEFEA;
+  --line-strong:   #D4D8D0;
+
+  /* ---------- Accent (brand) ---------- */
+  --accent:        #1F6F4A;
+  --accent-hover:  #185B3C;
+  --accent-soft:   #E8F1EC;
+  --accent-ink:    #125134;
+  --on-accent:     #FFFFFF;
+  --accent-ring:   rgba(31, 111, 74, .18);
+
+  /* ---------- Semantic (منفصلة عن الـ accent) ---------- */
+  --ok:            #1F6F4A;  --ok-soft:      #E8F1EC;
+  --warn:          #9A6710;  --warn-soft:    #F7EEDF;
+  --danger:        #A6342B;  --danger-soft:  #F8E9E7;
+  --info:          #2F5AA8;  --info-soft:    #E9EEF8;
+  --ai:            #5B4BC4;  --ai-soft:      #EDEAFA;
+
+  /* ---------- Tag colours (تصنيفات العملاء) ---------- */
+  --tag-new:       #2F5AA8;  --tag-new-bg:        #E9EEF8;
+  --tag-interested:#1F6F4A;  --tag-interested-bg: #E8F1EC;
+  --tag-ordered:   #9A6710;  --tag-ordered-bg:    #F7EEDF;
+  --tag-vip:       #7A4B12;  --tag-vip-bg:        #F6EAD6;
+  --tag-support:   #A6342B;  --tag-support-bg:    #F8E9E7;
+  --tag-closed:    #616A63;  --tag-closed-bg:     #EFF1EC;
+  --tag-group:     #5B4BC4;  --tag-group-bg:      #EDEAFA;
+
+  /* ---------- Chat bubbles ---------- */
+  --bub-in:        #FFFFFF;
+  --bub-in-ink:    #15181C;
+  --bub-in-line:   #E4E6E1;
+  --bub-out:       #ECF4EF;
+  --bub-out-ink:   #123324;
+  --bub-out-line:  #D2E4DA;
+  --bub-ai:        #F0EDFB;
+  --bub-ai-ink:    #2E2560;
+  --bub-ai-line:   #DFD8F6;
+
+  /* ---------- Radii ---------- */
+  --r-1: 5px;  --r-2: 7px;  --r-3: 10px;  --r-4: 14px;  --r-full: 999px;
+
+  /* ---------- Elevation (خفيفة جدًا في الوضع الفاتح) ---------- */
+  --sh-1: 0 1px 2px rgba(21, 24, 28, .05);
+  --sh-2: 0 1px 2px rgba(21, 24, 28, .05), 0 6px 16px -8px rgba(21, 24, 28, .16);
+  --sh-3: 0 2px 4px rgba(21, 24, 28, .06), 0 18px 44px -18px rgba(21, 24, 28, .26);
+  --sh-pop: 0 2px 6px rgba(21, 24, 28, .08), 0 28px 60px -22px rgba(21, 24, 28, .34);
+
+  /* ---------- Spacing ---------- */
+  --s-1: 4px; --s-2: 6px; --s-3: 8px;  --s-4: 12px;
+  --s-5: 16px; --s-6: 20px; --s-7: 28px; --s-8: 40px;
+
+  /* ---------- Motion ---------- */
+  --t-1: 130ms;   /* ردّ فعل: hover، ضغطة */
+  --t-2: 220ms;   /* تبديل محتوى: لوحة، قائمة */
+  --t-3: 360ms;   /* حركة مكانية: طبقة، لوح */
+  --t-4: 520ms;   /* تحوّل كبير */
+  --t-exit: 150ms;/* الخروج دايمًا أسرع من الدخول */
+  --e-out:    cubic-bezier(.16, 1, .3, 1);
+  --e-inout:  cubic-bezier(.65, 0, .35, 1);
+  --e-spring: cubic-bezier(.34, 1.4, .5, 1);
+
+  /* ---------- Type ---------- */
+  --font-ui:   'IBM Plex Sans Arabic', system-ui, 'Segoe UI', Tahoma, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+  --fs-xs: 11px; --fs-sm: 12.5px; --fs-md: 13.5px; --fs-lg: 15px;
+  --fs-xl: 18px; --fs-2xl: 22px; --fs-3xl: 28px;
+  --lh-body: 1.8;    /* العربي محتاج تنفّس أكتر من اللاتيني */
+  --lh-tight: 1.45;
+
+  /* ---------- Layout ---------- */
+  --rail-w: 62px;
+  --topbar-h: 52px;
+  --panel-list-w: 320px;
+  --panel-detail-w: 340px;
+
+  /* ---------- z-index ---------- */
+  --z-rail: 20; --z-topbar: 30; --z-sheet: 60; --z-palette: 80;
+  --z-toast: 90; --z-overlay: 100;
+
+  color-scheme: light;
+}
+
+/* ==========================================================================
+   Dark — "Nocturne" (B)
+   ========================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:          #070A0F;
+    --surface:     #0E141B;
+    --surface-2:   #131A22;
+    --surface-3:   #18212B;
+    --sunken:      #05080C;
+    --overlay:     rgba(0, 0, 0, .58);
+
+    --ink:         #F2F6F4;
+    --ink-2:       #C9D4CF;
+    --muted:       #93A29B;
+    --faint:       #66746D;
+
+    --line:        rgba(255, 255, 255, .095);
+    --line-2:      rgba(255, 255, 255, .05);
+    --line-strong: rgba(255, 255, 255, .16);
+
+    --accent:       #2BD98B;
+    --accent-hover: #4EE6A2;
+    --accent-soft:  rgba(43, 217, 139, .13);
+    --accent-ink:   #8FF3C4;
+    --on-accent:    #04170E;
+    --accent-ring:  rgba(43, 217, 139, .26);
+
+    --ok:     #2BD98B;  --ok-soft:     rgba(43, 217, 139, .13);
+    --warn:   #E0A85A;  --warn-soft:   rgba(224, 168, 90, .14);
+    --danger: #F0736A;  --danger-soft: rgba(240, 115, 106, .14);
+    --info:   #7BA5F0;  --info-soft:   rgba(123, 165, 240, .14);
+    --ai:     #A78BFA;  --ai-soft:     rgba(167, 139, 250, .15);
+
+    --tag-new:        #7BA5F0;  --tag-new-bg:        rgba(123, 165, 240, .14);
+    --tag-interested: #2BD98B;  --tag-interested-bg: rgba(43, 217, 139, .13);
+    --tag-ordered:    #E0A85A;  --tag-ordered-bg:    rgba(224, 168, 90, .14);
+    --tag-vip:        #F2C879;  --tag-vip-bg:        rgba(242, 200, 121, .14);
+    --tag-support:    #F0736A;  --tag-support-bg:    rgba(240, 115, 106, .14);
+    --tag-closed:     #93A29B;  --tag-closed-bg:     rgba(255, 255, 255, .06);
+    --tag-group:      #A78BFA;  --tag-group-bg:      rgba(167, 139, 250, .15);
+
+    --bub-in:       rgba(255, 255, 255, .055);
+    --bub-in-ink:   #F2F6F4;
+    --bub-in-line:  rgba(255, 255, 255, .08);
+    --bub-out:      rgba(43, 217, 139, .15);
+    --bub-out-ink:  #DFFFF0;
+    --bub-out-line: rgba(43, 217, 139, .26);
+    --bub-ai:       rgba(167, 139, 250, .15);
+    --bub-ai-ink:   #E4DBFF;
+    --bub-ai-line:  rgba(167, 139, 250, .26);
+
+    --sh-1: 0 1px 2px rgba(0, 0, 0, .5);
+    --sh-2: 0 1px 3px rgba(0, 0, 0, .55), 0 8px 22px -10px rgba(0, 0, 0, .8);
+    --sh-3: 0 2px 6px rgba(0, 0, 0, .6), 0 22px 52px -20px rgba(0, 0, 0, .9);
+    --sh-pop: 0 4px 10px rgba(0, 0, 0, .65), 0 32px 70px -24px rgba(0, 0, 0, .95);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:          #070A0F;
+  --surface:     #0E141B;
+  --surface-2:   #131A22;
+  --surface-3:   #18212B;
+  --sunken:      #05080C;
+  --overlay:     rgba(0, 0, 0, .58);
+
+  --ink:         #F2F6F4;
+  --ink-2:       #C9D4CF;
+  --muted:       #93A29B;
+  --faint:       #66746D;
+
+  --line:        rgba(255, 255, 255, .095);
+  --line-2:      rgba(255, 255, 255, .05);
+  --line-strong: rgba(255, 255, 255, .16);
+
+  --accent:       #2BD98B;
+  --accent-hover: #4EE6A2;
+  --accent-soft:  rgba(43, 217, 139, .13);
+  --accent-ink:   #8FF3C4;
+  --on-accent:    #04170E;
+  --accent-ring:  rgba(43, 217, 139, .26);
+
+  --ok:     #2BD98B;  --ok-soft:     rgba(43, 217, 139, .13);
+  --warn:   #E0A85A;  --warn-soft:   rgba(224, 168, 90, .14);
+  --danger: #F0736A;  --danger-soft: rgba(240, 115, 106, .14);
+  --info:   #7BA5F0;  --info-soft:   rgba(123, 165, 240, .14);
+  --ai:     #A78BFA;  --ai-soft:     rgba(167, 139, 250, .15);
+
+  --tag-new:        #7BA5F0;  --tag-new-bg:        rgba(123, 165, 240, .14);
+  --tag-interested: #2BD98B;  --tag-interested-bg: rgba(43, 217, 139, .13);
+  --tag-ordered:    #E0A85A;  --tag-ordered-bg:    rgba(224, 168, 90, .14);
+  --tag-vip:        #F2C879;  --tag-vip-bg:        rgba(242, 200, 121, .14);
+  --tag-support:    #F0736A;  --tag-support-bg:    rgba(240, 115, 106, .14);
+  --tag-closed:     #93A29B;  --tag-closed-bg:     rgba(255, 255, 255, .06);
+  --tag-group:      #A78BFA;  --tag-group-bg:      rgba(167, 139, 250, .15);
+
+  --bub-in:       rgba(255, 255, 255, .055);
+  --bub-in-ink:   #F2F6F4;
+  --bub-in-line:  rgba(255, 255, 255, .08);
+  --bub-out:      rgba(43, 217, 139, .15);
+  --bub-out-ink:  #DFFFF0;
+  --bub-out-line: rgba(43, 217, 139, .26);
+  --bub-ai:       rgba(167, 139, 250, .15);
+  --bub-ai-ink:   #E4DBFF;
+  --bub-ai-line:  rgba(167, 139, 250, .26);
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .5);
+  --sh-2: 0 1px 3px rgba(0, 0, 0, .55), 0 8px 22px -10px rgba(0, 0, 0, .8);
+  --sh-3: 0 2px 6px rgba(0, 0, 0, .6), 0 22px 52px -20px rgba(0, 0, 0, .9);
+  --sh-pop: 0 4px 10px rgba(0, 0, 0, .65), 0 32px 70px -24px rgba(0, 0, 0, .95);
+
+  color-scheme: dark;
+}
+
+/* الوضع الليلي بس هو اللي بياخد الوهج — لمسة B من غير ما تكلّف أداء */
+:root[data-theme="dark"] body::before,
+:root:not([data-theme="light"]) body::before { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-1: 1ms; --t-2: 1ms; --t-3: 1ms; --t-4: 1ms; --t-exit: 1ms;
+  }
+}

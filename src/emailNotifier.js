@@ -446,10 +446,11 @@ function generateVisualCancellationHtmlEmail(booking) {
 class EmailNotifier {
   static getTransporter() {
     const config = loadConfig();
-    const user = config.emailUser || process.env.EMAIL_USER;
-    const pass = config.emailPass || process.env.EMAIL_PASS;
-    const host = config.emailHost || process.env.EMAIL_HOST || "smtp.gmail.com";
-    const port = Number(config.emailPort || process.env.EMAIL_PORT || 465);
+    // Environment variables take priority - config.json should never hold real credentials.
+    const user = process.env.EMAIL_USER || config.emailUser;
+    const pass = process.env.EMAIL_PASS || config.emailPass;
+    const host = process.env.EMAIL_HOST || config.emailHost || "smtp.gmail.com";
+    const port = Number(process.env.EMAIL_PORT || config.emailPort || 465);
 
     if (!user || !pass) {
       return null;
@@ -487,7 +488,7 @@ class EmailNotifier {
     if (transporter) {
       try {
         const senderName = config.emailSenderName || "ReserveFlow & WhatsApp Pro";
-        const senderEmail = config.emailUser;
+        const senderEmail = process.env.EMAIL_USER || config.emailUser;
         const info = await transporter.sendMail({
           from: `"${senderName}" <${senderEmail}>`,
           to: customerEmail,
@@ -518,7 +519,7 @@ class EmailNotifier {
     if (transporter) {
       try {
         const senderName = config.emailSenderName || "ReserveFlow & WhatsApp Pro";
-        const senderEmail = config.emailUser;
+        const senderEmail = process.env.EMAIL_USER || config.emailUser;
         const info = await transporter.sendMail({
           from: `"${senderName}" <${senderEmail}>`,
           to: customerEmail,
@@ -557,7 +558,7 @@ class EmailNotifier {
     if (transporter) {
       try {
         const senderName = config.emailSenderName || "ReserveFlow & WhatsApp Pro";
-        const senderEmail = config.emailUser;
+        const senderEmail = process.env.EMAIL_USER || config.emailUser;
         const info = await transporter.sendMail({
           from: `"${senderName}" <${senderEmail}>`,
           to: customerEmail,

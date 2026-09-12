@@ -4,6 +4,11 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const cookieParser = require("cookie-parser");
+const cookie = require("cookie");
+const multer = require("multer");
+
 const whatsapp = require("./whatsapp");
 const autoReplyEngine = require("./autoReply");
 const crmDB = require("./database");
@@ -11,118 +16,275 @@ const AutomationTools = require("./automationTools");
 const BookingEngine = require("./bookingEngine");
 const EmailNotifier = require("./emailNotifier");
 const lidMapper = require("./lidMapper");
+const { tenantContext, LEGACY_TENANT } = require("./tenant");
+const {
+  hashPassword,
+  verifyPassword,
+  setSessionCookie,
+  clearSessionCookie,
+  verifyToken,
+  isValidEmail,
+  COOKIE_NAME,
+} = require("./auth");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
+  cors: { origin: "*" },
 });
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/uploads", express.static(path.join(__dirname, "public", "uploads")));
 
-// Link WhatsApp client events to Socket.io
-whatsapp.setEventEmitter((event, data) => {
-  io.emit(event, data);
+// Per-account campaign image uploads land in that account's own folder
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(__dirname, "public", "uploads", req.userId || "shared");
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const clean = (file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${Date.now()}_${clean}`);
+    },
+  }),
 });
 
-// Socket connection
-io.on("connection", async (socket) => {
-  // Send current state and CRM data to newly connected client
+// Route every WhatsApp event to the browser session(s) of that SAME
+// account only, via a Socket.io room - never a global broadcast.
+whatsapp.setEventEmitter((userId, event, data) => {
+  io.to(`user:${userId}`).emit(event, data);
+});
+
+// ==========================================================
+// Auth: register / login / logout / me
+// A JWT in an httpOnly cookie is the session - no server-side
+// session store needed. The very first account ever created on
+// this deployment inherits all the data that already existed
+// before multi-tenancy (contacts, campaigns, saved presets, the
+// already-linked WhatsApp session) - everyone who registers after
+// that gets a brand new, empty, fully isolated account.
+// ==========================================================
+const authRouter = express.Router();
+
+authRouter.post("/register", async (req, res) => {
   try {
-    const rawContacts = await crmDB.getContacts();
-    const contacts = rawContacts.map(c => {
-      const isGrp = c.is_group === 1 || (c.jid && c.jid.endsWith("@g.us"));
-      let cleanPhone = c.phone || "";
-      if (!isGrp && (!cleanPhone || cleanPhone.length >= 14 || cleanPhone.includes("@") || c.jid.endsWith("@lid"))) {
-        cleanPhone = lidMapper.resolveLidToPhone(c.phone || c.jid) || cleanPhone;
-      }
-      return { ...c, phone: cleanPhone };
-    });
-    const analytics = await crmDB.getAnalytics();
-    socket.emit("initial_state", {
-      state: whatsapp.getState(),
-      rules: autoReplyEngine.getRules(),
-      messages: whatsapp.getMessages(),
-      contacts,
-      analytics,
+    const { email, password, displayName } = req.body || {};
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "بريد إلكتروني غير صالح." });
+    }
+    if (!password || String(password).length < 6) {
+      return res.status(400).json({ error: "كلمة المرور يجب ألا تقل عن 6 أحرف." });
+    }
+
+    const existing = await crmDB.getUserByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: "هذا البريد الإلكتروني مسجّل بالفعل." });
+    }
+
+    const isFirstUser = (await crmDB.countUsers()) === 0;
+    const id = isFirstUser ? LEGACY_TENANT : crypto.randomUUID();
+    const passwordHash = await hashPassword(password);
+    const user = await crmDB.createUser({ id, email, passwordHash, displayName });
+
+    setSessionCookie(res, user);
+    res.json({
+      success: true,
+      isFirstUser,
+      user: { id: user.id, email: user.email, displayName: user.displayName },
     });
   } catch (err) {
-    socket.emit("initial_state", {
-      state: whatsapp.getState(),
-      rules: autoReplyEngine.getRules(),
-      messages: whatsapp.getMessages(),
-      contacts: [],
-    });
+    console.error("[Auth] register error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ==========================================
-// 1. Core WhatsApp & Bot Status Endpoints
-// ==========================================
-app.get("/api/status", (req, res) => {
-  res.json(whatsapp.getState());
+authRouter.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: "البريد الإلكتروني وكلمة المرور مطلوبان." });
+    }
+    const user = await crmDB.getUserByEmail(email);
+    if (!user) return res.status(401).json({ error: "بيانات الدخول غير صحيحة." });
+
+    const ok = await verifyPassword(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: "بيانات الدخول غير صحيحة." });
+
+    setSessionCookie(res, user);
+    res.json({
+      success: true,
+      user: { id: user.id, email: user.email, displayName: user.display_name },
+    });
+  } catch (err) {
+    console.error("[Auth] login error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get("/api/messages", (req, res) => {
-  res.json(whatsapp.getMessages());
+authRouter.post("/logout", (req, res) => {
+  clearSessionCookie(res);
+  res.json({ success: true });
 });
 
-app.get("/api/rules", (req, res) => {
-  res.json({
-    botEnabled: autoReplyEngine.isBotEnabled(),
-    rules: autoReplyEngine.getRules(),
+authRouter.get("/me", async (req, res) => {
+  try {
+    const token = req.cookies?.[COOKIE_NAME];
+    const payload = token && verifyToken(token);
+    if (!payload || !payload.uid) return res.status(401).json({ error: "not signed in" });
+    const user = await crmDB.getUserById(payload.uid);
+    if (!user) return res.status(401).json({ error: "not signed in" });
+    res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use("/api/auth", authRouter);
+
+// Everything else under /api requires a signed-in account, and runs
+// with that account's tenant context active for every database call
+// made anywhere during the request (see tenant.js).
+function requireAuth(req, res, next) {
+  const token = req.cookies?.[COOKIE_NAME];
+  const payload = token && verifyToken(token);
+  if (!payload || !payload.uid) {
+    return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول." });
+  }
+  req.userId = payload.uid;
+  req.userEmail = payload.email;
+  next();
+}
+
+app.use("/api", requireAuth);
+app.use("/api", (req, res, next) => {
+  tenantContext.run({ userId: req.userId }, next);
+});
+
+// ==========================================================
+// Socket.io - authenticate via the same session cookie, then
+// join a private per-account room so events never cross accounts.
+// ==========================================================
+io.use((socket, next) => {
+  try {
+    const raw = socket.handshake.headers.cookie || "";
+    const parsed = cookie.parse(raw);
+    const token = parsed[COOKIE_NAME];
+    const payload = token && verifyToken(token);
+    if (!payload || !payload.uid) return next(new Error("unauthorized"));
+    socket.userId = payload.uid;
+    next();
+  } catch (e) {
+    next(new Error("unauthorized"));
+  }
+});
+
+io.on("connection", (socket) => {
+  socket.join(`user:${socket.userId}`);
+
+  tenantContext.run({ userId: socket.userId }, async () => {
+    try {
+      const client = whatsapp.getClient(socket.userId);
+      const rawContacts = await crmDB.getContacts();
+      const contacts = rawContacts.map(c => {
+        const isGrp = c.is_group === 1 || (c.jid && c.jid.endsWith("@g.us"));
+        let cleanPhone = c.phone || "";
+        if (!isGrp && (!cleanPhone || cleanPhone.length >= 14 || cleanPhone.includes("@") || c.jid.endsWith("@lid"))) {
+          cleanPhone = lidMapper.resolveLidToPhone(c.phone || c.jid) || cleanPhone;
+        }
+        return { ...c, phone: cleanPhone };
+      });
+      const analytics = await crmDB.getAnalytics();
+      const rules = await autoReplyEngine.getRules();
+      const botEnabled = await autoReplyEngine.isBotEnabled();
+      socket.emit("initial_state", {
+        state: { ...client.getState(), botEnabled },
+        rules,
+        messages: client.getMessages(),
+        contacts,
+        analytics,
+      });
+    } catch (err) {
+      socket.emit("initial_state", {
+        state: whatsapp.getClient(socket.userId).getState(),
+        rules: [],
+        messages: [],
+        contacts: [],
+      });
+    }
   });
 });
 
-app.post("/api/rules", (req, res) => {
+// ==========================================================
+// 1. Core WhatsApp & Bot Status Endpoints
+// ==========================================================
+app.get("/api/status", (req, res) => {
+  const client = whatsapp.getClient(req.userId);
+  res.json(client.getState());
+});
+
+app.get("/api/messages", (req, res) => {
+  const client = whatsapp.getClient(req.userId);
+  res.json(client.getMessages());
+});
+
+app.get("/api/rules", async (req, res) => {
+  res.json({
+    botEnabled: await autoReplyEngine.isBotEnabled(),
+    rules: await autoReplyEngine.getRules(),
+  });
+});
+
+app.post("/api/rules", async (req, res) => {
   const { keyword, matchType, response } = req.body;
   if (!keyword || !response) {
     return res.status(400).json({ error: "Keyword and Response are required." });
   }
-  const newRule = autoReplyEngine.addRule({ keyword, matchType, response });
-  io.emit("rules_updated", {
-    botEnabled: autoReplyEngine.isBotEnabled(),
-    rules: autoReplyEngine.getRules(),
+  const newRule = await autoReplyEngine.addRule({ keyword, matchType, response });
+  io.to(`user:${req.userId}`).emit("rules_updated", {
+    botEnabled: await autoReplyEngine.isBotEnabled(),
+    rules: await autoReplyEngine.getRules(),
   });
   res.json(newRule);
 });
 
-app.put("/api/rules/:id", (req, res) => {
-  const updated = autoReplyEngine.updateRule(req.params.id, req.body);
+app.put("/api/rules/:id", async (req, res) => {
+  const updated = await autoReplyEngine.updateRule(req.params.id, req.body);
   if (!updated) {
     return res.status(404).json({ error: "Rule not found." });
   }
-  io.emit("rules_updated", {
-    botEnabled: autoReplyEngine.isBotEnabled(),
-    rules: autoReplyEngine.getRules(),
+  io.to(`user:${req.userId}`).emit("rules_updated", {
+    botEnabled: await autoReplyEngine.isBotEnabled(),
+    rules: await autoReplyEngine.getRules(),
   });
   res.json(updated);
 });
 
-app.delete("/api/rules/:id", (req, res) => {
-  const deleted = autoReplyEngine.deleteRule(req.params.id);
+app.delete("/api/rules/:id", async (req, res) => {
+  const deleted = await autoReplyEngine.deleteRule(req.params.id);
   if (!deleted) {
     return res.status(404).json({ error: "Rule not found." });
   }
-  io.emit("rules_updated", {
-    botEnabled: autoReplyEngine.isBotEnabled(),
-    rules: autoReplyEngine.getRules(),
+  io.to(`user:${req.userId}`).emit("rules_updated", {
+    botEnabled: await autoReplyEngine.isBotEnabled(),
+    rules: await autoReplyEngine.getRules(),
   });
   res.json({ success: true });
 });
 
-app.post("/api/bot/toggle", (req, res) => {
+app.post("/api/bot/toggle", async (req, res) => {
   const { enabled } = req.body;
-  const current = autoReplyEngine.setBotEnabled(enabled !== undefined ? enabled : !autoReplyEngine.isBotEnabled());
-  io.emit("rules_updated", {
+  const current = await autoReplyEngine.setBotEnabled(
+    enabled !== undefined ? enabled : !(await autoReplyEngine.isBotEnabled())
+  );
+  io.to(`user:${req.userId}`).emit("rules_updated", {
     botEnabled: current,
-    rules: autoReplyEngine.getRules(),
+    rules: await autoReplyEngine.getRules(),
   });
   res.json({ botEnabled: current });
 });
@@ -133,7 +295,8 @@ app.post("/api/send", async (req, res) => {
     return res.status(400).json({ error: "Recipient (to) and text are required." });
   }
   try {
-    const result = await whatsapp.sendMessage(to, text);
+    const client = whatsapp.getClient(req.userId);
+    const result = await client.sendMessage(to, text);
     res.json({ success: true, message: result });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -142,16 +305,17 @@ app.post("/api/send", async (req, res) => {
 
 app.post("/api/logout", async (req, res) => {
   try {
-    await whatsapp.logout();
+    const client = whatsapp.getClient(req.userId);
+    await client.logout();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// ==========================================
+// ==========================================================
 // 2. CRM & Smart Inbox Endpoints
-// ==========================================
+// ==========================================================
 app.get("/api/contacts", async (req, res) => {
   try {
     let search = req.query.search || "";
@@ -169,12 +333,164 @@ app.get("/api/contacts", async (req, res) => {
       if (!isGrp && (!cleanPhone || cleanPhone.length >= 14 || cleanPhone.includes("@") || c.jid.endsWith("@lid"))) {
         cleanPhone = lidMapper.resolveLidToPhone(c.phone || c.jid) || cleanPhone;
       }
-      return {
-        ...c,
-        phone: cleanPhone,
-      };
+      return { ...c, phone: cleanPhone };
     });
     res.json({ success: true, contacts: mapped });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/export/contacts", async (req, res) => {
+  try {
+    let tag = req.query.tag || "all";
+    if (tag === "undefined" || tag === "null" || !tag) tag = "all";
+    tag = tag.trim();
+
+    let groupJid = req.query.groupJid || null;
+    const client = whatsapp.getClient(req.userId);
+
+    let contactsToExport = [];
+
+    if (groupJid) {
+      const groupDetails = await client.getGroupDetails(groupJid);
+      if (groupDetails && groupDetails.participants) {
+        contactsToExport = groupDetails.participants.map(p => ({
+          jid: p.id,
+          phone: p.id.split("@")[0].replace(/\D/g, ""),
+          isAdmin: p.admin ? true : false
+        }));
+      }
+    } else {
+      const contacts = await crmDB.getContacts("", tag);
+      contactsToExport = contacts.map(c => {
+        const isGrp = c.is_group === 1 || (c.jid && c.jid.endsWith("@g.us"));
+        let cleanPhone = c.phone || "";
+        if (!isGrp && (!cleanPhone || cleanPhone.length >= 14 || cleanPhone.includes("@") || c.jid.endsWith("@lid"))) {
+          cleanPhone = lidMapper.resolveLidToPhone(c.phone || c.jid) || cleanPhone;
+        }
+        return {
+          name: c.name || "",
+          phone: cleanPhone,
+          jid: c.jid,
+          tag: c.status_tag,
+          isGroup: isGrp
+        };
+      });
+    }
+
+    res.json({ success: true, count: contactsToExport.length, data: contactsToExport });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Extraction / export tool: contacts, one group, several groups, or every group ----
+app.get("/api/export/groups", async (req, res) => {
+  try {
+    const client = whatsapp.getClient(req.userId);
+    const groups = await client.getAllGroups();
+    res.json({ success: true, groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/export/extract", async (req, res) => {
+  try {
+    const client = whatsapp.getClient(req.userId);
+    const {
+      source = "groups",       // "groups" | "contacts" | "all-groups"
+      groupJids = [],
+      dedupe = true,
+      includeNames = true,
+      excludeAdmins = false,
+      adminsOnly = false,
+      excludeNumbers = [],
+      tag = "all",
+    } = req.body || {};
+
+    let rawEntries = [];
+
+    if (source === "contacts") {
+      const contacts = await crmDB.getContacts("", tag);
+      for (const c of contacts) {
+        const isGrp = c.is_group === 1 || (c.jid && c.jid.endsWith("@g.us"));
+        if (isGrp) continue;
+        let phone = c.phone || "";
+        if (!phone || phone.length >= 14 || phone.includes("@")) {
+          phone = lidMapper.resolveLidToPhone(c.phone || c.jid) || phone;
+        }
+        if (!phone) continue;
+        rawEntries.push({ phone, jid: c.jid, name: c.name || "", source: "crm" });
+      }
+    } else {
+      let targetGroupJids = [];
+      if (source === "all-groups") {
+        const allGroups = await client.getAllGroups();
+        targetGroupJids = allGroups.map(g => g.jid);
+      } else {
+        targetGroupJids = Array.isArray(groupJids) ? groupJids : [];
+      }
+
+      for (const gJid of targetGroupJids) {
+        const details = await client.getGroupDetails(gJid);
+        if (!details || !details.participants) continue;
+        for (const p of details.participants) {
+          if (adminsOnly && !p.isAdmin) continue;
+          if (excludeAdmins && p.isAdmin) continue;
+          const phone = p.phone || (p.id ? p.id.split("@")[0].replace(/\D/g, "") : "");
+          if (!phone) continue;
+          rawEntries.push({
+            phone,
+            jid: p.id,
+            name: "",
+            isAdmin: !!p.isAdmin,
+            groupName: details.subject,
+            groupJid: gJid,
+            source: "group",
+          });
+        }
+      }
+    }
+
+    if (includeNames) {
+      const known = await crmDB.getContacts();
+      const byPhone = new Map();
+      for (const c of known) {
+        if (c.phone) byPhone.set(c.phone, c.name);
+      }
+      for (const e of rawEntries) {
+        if (!e.name && byPhone.has(e.phone)) e.name = byPhone.get(e.phone) || "";
+      }
+    }
+
+    const excludeSet = new Set((excludeNumbers || []).map(n => String(n).replace(/\D/g, "")).filter(Boolean));
+    if (excludeSet.size > 0) {
+      rawEntries = rawEntries.filter(e => !excludeSet.has(e.phone));
+    }
+
+    let finalEntries = rawEntries;
+    if (dedupe) {
+      const map = new Map();
+      for (const e of rawEntries) {
+        if (!map.has(e.phone)) {
+          map.set(e.phone, { ...e, groups: e.groupName ? [e.groupName] : undefined });
+        } else if (e.groupName) {
+          const existing = map.get(e.phone);
+          if (!existing.groups) existing.groups = [];
+          if (!existing.groups.includes(e.groupName)) existing.groups.push(e.groupName);
+        }
+      }
+      finalEntries = Array.from(map.values());
+    }
+
+    res.json({
+      success: true,
+      count: finalEntries.length,
+      duplicatesRemoved: rawEntries.length - finalEntries.length,
+      data: finalEntries,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -194,6 +510,7 @@ app.get("/api/contacts/:jid/messages", async (req, res) => {
 app.get("/api/contacts/:jid/details", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
+    const client = whatsapp.getClient(req.userId);
     let contact = await crmDB.getContact(jid);
     if (!contact) {
       contact = { jid, name: jid.split("@")[0], phone: jid.split("@")[0], status_tag: "new" };
@@ -206,19 +523,17 @@ app.get("/api/contacts/:jid/details", async (req, res) => {
     }
     contact.phone = resolvedPhone;
 
-    // Try to fetch latest avatar if missing
-    if (!contact.avatar_url && whatsapp.isConnected) {
-      const avatarUrl = await whatsapp.getProfilePicture(jid);
+    if (!contact.avatar_url && client.isConnected) {
+      const avatarUrl = await client.getProfilePicture(jid);
       if (avatarUrl) {
         await crmDB.updateContactAvatar(jid, avatarUrl);
         contact.avatar_url = avatarUrl;
-        io.emit("contact_avatar_updated", { jid, avatar_url: avatarUrl });
+        io.to(`user:${req.userId}`).emit("contact_avatar_updated", { jid, avatar_url: avatarUrl });
       }
     }
 
-    // Try to fetch WhatsApp status/bio if missing
-    if (!contact.status_bio && whatsapp.isConnected) {
-      const bio = await whatsapp.getContactStatus(jid);
+    if (!contact.status_bio && client.isConnected) {
+      const bio = await client.getContactStatus(jid);
       if (bio) {
         await crmDB.updateContactBio(jid, bio);
         contact.status_bio = bio;
@@ -227,78 +542,73 @@ app.get("/api/contacts/:jid/details", async (req, res) => {
 
     const cleanPhone = resolvedPhone;
 
-    // Fetch related Orders
     let orders = [];
     try {
       if (crmDB.isPostgres) {
-        const oRes = await crmDB.pgPool.query(
+        const oRes = await crmDB.q(
           "SELECT * FROM orders_leads WHERE contact_jid = $1 OR (phone != '' AND phone = $2) ORDER BY id DESC LIMIT 10",
           [jid, cleanPhone]
         );
         orders = oRes.rows;
       } else {
-        orders = crmDB.sqliteDb.prepare(
+        orders = crmDB.db.prepare(
           "SELECT * FROM orders_leads WHERE contact_jid = ? OR (phone != '' AND phone = ?) ORDER BY id DESC LIMIT 10"
         ).all(jid, cleanPhone);
       }
     } catch (e) {}
 
-    // Fetch related Bookings
     let bookings = [];
     try {
       if (crmDB.isPostgres) {
-        const bRes = await crmDB.pgPool.query(
+        const bRes = await crmDB.q(
           "SELECT * FROM bookings_appointments WHERE contact_jid = $1 OR (customer_phone != '' AND customer_phone = $2) ORDER BY id DESC LIMIT 10",
           [jid, cleanPhone]
         );
         bookings = bRes.rows;
       } else {
-        bookings = crmDB.sqliteDb.prepare(
+        bookings = crmDB.db.prepare(
           "SELECT * FROM bookings_appointments WHERE contact_jid = ? OR (customer_phone != '' AND customer_phone = ?) ORDER BY id DESC LIMIT 10"
         ).all(jid, cleanPhone);
       }
     } catch (e) {}
 
-    // Fetch Shared Media
     let sharedMedia = [];
     try {
       if (crmDB.isPostgres) {
-        const mRes = await crmDB.pgPool.query(
+        const mRes = await crmDB.q(
           "SELECT id, text, media_type, media_url, timestamp, from_me FROM messages WHERE contact_jid = $1 AND media_url IS NOT NULL AND media_url != '' ORDER BY timestamp DESC LIMIT 30",
           [jid]
         );
         sharedMedia = mRes.rows;
       } else {
-        sharedMedia = crmDB.sqliteDb.prepare(
+        sharedMedia = crmDB.db.prepare(
           "SELECT id, text, media_type, media_url, timestamp, from_me FROM messages WHERE contact_jid = ? AND media_url IS NOT NULL AND media_url != '' ORDER BY timestamp DESC LIMIT 30"
         ).all(jid);
       }
     } catch (e) {}
 
-    // Fetch Shared Group Messages sent by this contact across all groups
     let sharedGroupMessages = [];
     try {
       sharedGroupMessages = await crmDB.getSharedGroupsMessages(jid, 50);
     } catch (e) {}
 
-    // If this is a Group, fetch full WhatsApp Group Metadata & Participants
     let groupDetails = null;
-    if (isGroup && whatsapp) {
-      groupDetails = await whatsapp.getGroupDetails(jid);
+    if (isGroup) {
+      groupDetails = await client.getGroupDetails(jid);
       if (groupDetails && groupDetails.participants) {
         try {
           const participantJids = groupDetails.participants.map(p => p.id);
           if (participantJids.length > 0) {
             let knownContacts = [];
             if (crmDB.isPostgres) {
-              const kcRes = await crmDB.pgPool.query(
+              const kcRes = await crmDB.q(
                 "SELECT jid, name, phone, avatar_url FROM contacts WHERE jid = ANY($1)",
                 [participantJids]
               );
               knownContacts = kcRes.rows;
             } else {
               const placeholders = participantJids.map(() => "?").join(",");
-              knownContacts = crmDB.sqliteDb.prepare(
+              knownContacts = crmDB.db.prepare(
                 `SELECT jid, name, phone, avatar_url FROM contacts WHERE jid IN (${placeholders})`
               ).all(...participantJids);
             }
@@ -331,7 +641,6 @@ app.get("/api/contacts/:jid/details", async (req, res) => {
   }
 });
 
-// Get all messages sent by this contact in all shared WhatsApp groups
 app.get("/api/contacts/:jid/group-activity", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
@@ -342,101 +651,94 @@ app.get("/api/contacts/:jid/group-activity", async (req, res) => {
   }
 });
 
-// Human Takeover: Toggle Bot Paused per Contact
 app.post("/api/contacts/:jid/toggle-bot", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { paused } = req.body;
     await crmDB.toggleBotPaused(jid, !!paused);
-    io.emit("contact_updated", { jid, bot_paused: paused ? 1 : 0 });
+    io.to(`user:${req.userId}`).emit("contact_updated", { jid, bot_paused: paused ? 1 : 0 });
     res.json({ success: true, jid, bot_paused: paused ? 1 : 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update Contact Profile (Name, Phone, City, Governorate, Address, Status Tag, Notes)
 app.post("/api/contacts/:jid/profile", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { name, phone, city, governorate, address, status_tag, custom_notes } = req.body;
     await crmDB.updateContactProfile(jid, { name, phone, city, governorate, address, status_tag, custom_notes });
     const updated = await crmDB.getContact(jid);
-    io.emit("contact_updated", updated || { jid, name, phone, status_tag, custom_notes });
+    io.to(`user:${req.userId}`).emit("contact_updated", updated || { jid, name, phone, status_tag, custom_notes });
     res.json({ success: true, contact: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update Contact Status Tag (new, interested, ordered, vip, support, closed)
 app.post("/api/contacts/:jid/tag", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { tag } = req.body;
     await crmDB.updateContactTag(jid, tag);
-    io.emit("contact_updated", { jid, status_tag: tag });
+    io.to(`user:${req.userId}`).emit("contact_updated", { jid, status_tag: tag });
     res.json({ success: true, jid, status_tag: tag });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update Contact Custom Notes
 app.post("/api/contacts/:jid/notes", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { notes } = req.body;
     await crmDB.updateContactNotes(jid, notes);
-    io.emit("contact_updated", { jid, custom_notes: notes });
+    io.to(`user:${req.userId}`).emit("contact_updated", { jid, custom_notes: notes });
     res.json({ success: true, jid, custom_notes: notes });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Mark Contact as Read
 app.post("/api/contacts/:jid/read", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     await crmDB.markContactRead(jid);
-    io.emit("contact_read", { jid });
+    io.to(`user:${req.userId}`).emit("contact_read", { jid });
     res.json({ success: true, jid });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Send Manual Message from Dashboard
 app.post("/api/contacts/:jid/send", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { text, autoPauseBot } = req.body;
     if (!text) return res.status(400).json({ error: "Text is required." });
 
-    // If admin replies, optionally auto-pause bot (Human takeover) so AI doesn't interfere
     if (autoPauseBot) {
       await crmDB.toggleBotPaused(jid, 1);
-      io.emit("contact_updated", { jid, bot_paused: 1 });
+      io.to(`user:${req.userId}`).emit("contact_updated", { jid, bot_paused: 1 });
     }
 
-    const sent = await whatsapp.sendMessage(jid, text, false);
+    const client = whatsapp.getClient(req.userId);
+    const sent = await client.sendMessage(jid, text, false);
     res.json({ success: true, message: sent });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Send Natural Arabic Voice Note
 app.post("/api/contacts/:jid/send-voice", async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const { text, lang } = req.body;
     if (!text) return res.status(400).json({ error: "Text is required." });
 
-    const result = await AutomationTools.sendVoiceNote(whatsapp, jid, text, lang || "ar");
+    const client = whatsapp.getClient(req.userId);
+    const result = await AutomationTools.sendVoiceNote(client, jid, text, lang || "ar");
     if (result.success) {
-      // Save message to CRM DB
       const msgData = {
         id: "voice_" + Date.now(),
         sender: jid,
@@ -449,7 +751,7 @@ app.post("/api/contacts/:jid/send-voice", async (req, res) => {
         timestamp: Date.now(),
       };
       await crmDB.saveMessage(msgData);
-      io.emit("new_message", msgData);
+      io.to(`user:${req.userId}`).emit("new_message", msgData);
       res.json({ success: true, message: "Voice note sent", mediaUrl: result.mediaUrl });
     } else {
       res.status(500).json({ error: result.error });
@@ -459,9 +761,9 @@ app.post("/api/contacts/:jid/send-voice", async (req, res) => {
   }
 });
 
-// ==========================================
+// ==========================================================
 // 3. Leads & Orders Management
-// ==========================================
+// ==========================================================
 app.get("/api/orders", async (req, res) => {
   try {
     const orders = await crmDB.getOrdersLeads();
@@ -474,7 +776,7 @@ app.get("/api/orders", async (req, res) => {
 app.post("/api/orders", async (req, res) => {
   try {
     const result = await AutomationTools.recordOrderLead(req.body);
-    io.emit("new_order", result);
+    io.to(`user:${req.userId}`).emit("new_order", result);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -491,9 +793,9 @@ app.put("/api/orders/:id/status", async (req, res) => {
   }
 });
 
-// ==========================================
+// ==========================================================
 // 4. Marketing Campaigns & Broadcast Engine
-// ==========================================
+// ==========================================================
 app.get("/api/campaigns", async (req, res) => {
   try {
     const campaigns = await crmDB.getCampaigns();
@@ -503,19 +805,36 @@ app.get("/api/campaigns", async (req, res) => {
   }
 });
 
-app.post("/api/campaigns", async (req, res) => {
+app.post("/api/campaigns", upload.single("image"), async (req, res) => {
   try {
-    const { title, template, contacts, delaySeconds } = req.body;
+    let { title, template, contacts, delaySeconds } = req.body || {};
+    let imagePath = null;
+
+    if (req.file) {
+      imagePath = req.file.path;
+    }
+
+    if (typeof contacts === "string") {
+      try {
+        contacts = JSON.parse(contacts);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid contacts format." });
+      }
+    }
+
     if (!title || !template || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: "Title, template, and contacts array are required." });
     }
 
-    const result = await AutomationTools.runCampaign(whatsapp, {
+    const client = whatsapp.getClient(req.userId);
+    const userId = req.userId;
+    const result = await AutomationTools.runCampaign(client, {
       title,
       template,
       contacts,
+      imagePath,
       delaySeconds: Number(delaySeconds) || 8,
-      ioEmitter: (evt, payload) => io.emit(evt, payload),
+      ioEmitter: (evt, payload) => io.to(`user:${userId}`).emit(evt, payload),
     });
 
     res.json(result);
@@ -524,9 +843,87 @@ app.post("/api/campaigns", async (req, res) => {
   }
 });
 
-// ==========================================
+app.post("/api/campaigns/:id/control", async (req, res) => {
+  try {
+    const campaignId = req.params.id;
+    const { action } = req.body;
+
+    if (!['pause', 'resume', 'cancel'].includes(action)) {
+      return res.status(400).json({ error: "Invalid action. Use 'pause', 'resume', or 'cancel'." });
+    }
+
+    if (AutomationTools.campaignState[campaignId]) {
+      AutomationTools.campaignState[campaignId] = action === 'resume' ? 'running' : action === 'pause' ? 'paused' : 'cancelled';
+
+      let newStatus = action === 'resume' ? 'running' : action === 'pause' ? 'paused' : 'cancelled';
+      await crmDB.updateCampaignStatusOnly(campaignId, newStatus);
+
+      io.to(`user:${req.userId}`).emit("campaign_status_changed", { campaignId, status: newStatus });
+      res.json({ success: true, status: newStatus });
+    } else {
+      res.status(404).json({ error: "Campaign not active or already finished." });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/campaigns/:id/logs", async (req, res) => {
+  try {
+    const logs = await crmDB.getCampaignLogs(req.params.id);
+    res.json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/groups", async (req, res) => {
+  try {
+    const client = whatsapp.getClient(req.userId);
+    const groups = await client.getAllGroups();
+    res.json({ success: true, groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/audience-presets", async (req, res) => {
+  try {
+    const presets = await crmDB.getAudiencePresets();
+    res.json({ success: true, presets });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/audience-presets", async (req, res) => {
+  try {
+    const { id, name, type, targetJids, excludedJids } = req.body;
+    if (!name || !Array.isArray(targetJids)) {
+      return res.status(400).json({ error: "Name and targetJids array are required." });
+    }
+    const preset = await crmDB.saveAudiencePreset({ id, name, type: type || "groups", targetJids, excludedJids: excludedJids || [] });
+    io.to(`user:${req.userId}`).emit("audience_presets_updated", preset);
+    res.json({ success: true, preset });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/audience-presets/:id", async (req, res) => {
+  try {
+    await crmDB.deleteAudiencePreset(req.params.id);
+    io.to(`user:${req.userId}`).emit("audience_presets_updated", { deletedId: req.params.id });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ==========================================================
 // 5. Analytics & Dashboard Stats
-// ==========================================
+// ==========================================================
 app.get("/api/analytics", async (req, res) => {
   try {
     const analytics = await crmDB.getAnalytics();
@@ -536,12 +933,13 @@ app.get("/api/analytics", async (req, res) => {
   }
 });
 
-// ==========================================
+// ==========================================================
 // 6. MicroMind AI Custom Tools Endpoints (Cloudflare Webhook)
-// ==========================================
+// Note: these are called BY your MicroMind chatflow, per account,
+// so they still need a signed-in session like everything else here.
+// ==========================================================
 app.post("/api/tools/order", async (req, res) => {
   try {
-    console.log("⚡ [MicroMind Tool] Received record_order request:", req.body);
     const { customerName, phone, orderDetails, address, totalPrice, contactJid } = req.body;
     const result = await AutomationTools.recordOrderLead({
       contactJid: contactJid || (phone ? `${phone.replace(/\D/g, "")}@s.whatsapp.net` : ""),
@@ -551,7 +949,7 @@ app.post("/api/tools/order", async (req, res) => {
       address,
       totalPrice,
     });
-    io.emit("new_order", result);
+    io.to(`user:${req.userId}`).emit("new_order", result);
     res.json(result);
   } catch (err) {
     console.error("⚠️ [MicroMind Tool Error]:", err);
@@ -561,9 +959,9 @@ app.post("/api/tools/order", async (req, res) => {
 
 app.post("/api/tools/voice", async (req, res) => {
   try {
-    console.log("⚡ [MicroMind Tool] Received send_voice request:", req.body);
     const { to, text, lang } = req.body;
-    const result = await AutomationTools.sendVoiceNote(whatsapp, to, text, lang || "ar");
+    const client = whatsapp.getClient(req.userId);
+    const result = await AutomationTools.sendVoiceNote(client, to, text, lang || "ar");
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -575,8 +973,7 @@ app.post("/api/tools/takeover", async (req, res) => {
     const { contactJid } = req.body;
     if (contactJid) {
       await crmDB.toggleBotPaused(contactJid, 1);
-      io.emit("contact_updated", { jid: contactJid, bot_paused: 1 });
-      console.log(`🙋 [Human Takeover] Activated for ${contactJid}`);
+      io.to(`user:${req.userId}`).emit("contact_updated", { jid: contactJid, bot_paused: 1 });
       return res.json({ success: true, message: "Human takeover activated" });
     }
     res.status(400).json({ error: "contactJid is required" });
@@ -584,38 +981,64 @@ app.post("/api/tools/takeover", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.get("/api/settings", (req, res) => {
+
+// ==========================================================
+// Settings: per-account business settings (bot/AI/rules-related)
+// live in the database now; shared deployment infra (SMTP email,
+// port) still lives in config.json since it's one mailbox/server
+// for the whole deployment, not one per account.
+// ==========================================================
+app.get("/api/settings", async (req, res) => {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "config.json"), "utf-8"));
-    // Mask password
     const safeConfig = { ...config };
     if (safeConfig.emailPass) safeConfig.emailPass = "••••••••";
-    res.json({ success: true, settings: safeConfig });
+    delete safeConfig.autoReplyRules; // now per-account, served via /api/rules
+
+    const tenantSettings = await autoReplyEngine.getSettings();
+    res.json({ success: true, settings: { ...safeConfig, ...tenantSettings } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.post("/api/settings", (req, res) => {
+app.post("/api/settings", async (req, res) => {
   try {
-    const configPath = path.join(__dirname, "..", "config.json");
-    const current = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const updates = req.body;
-
-    if (updates.emailPass === "••••••••") {
-      delete updates.emailPass;
+    const updates = req.body || {};
+    const tenantFields = ["botEnabled", "aiMode", "microMindApiUrl", "googleSheetWebhookUrl"];
+    const tenantUpdates = {};
+    const globalUpdates = {};
+    for (const key of Object.keys(updates)) {
+      if (tenantFields.includes(key)) tenantUpdates[key] = updates[key];
+      else globalUpdates[key] = updates[key];
     }
 
-    const updated = { ...current, ...updates };
-    fs.writeFileSync(configPath, JSON.stringify(updated, null, 2), "utf-8");
-    res.json({ success: true, settings: updated });
+    if (Object.keys(tenantUpdates).length > 0) {
+      await crmDB.setBotSettings(tenantUpdates);
+    }
+
+    if (Object.keys(globalUpdates).length > 0) {
+      const configPath = path.join(__dirname, "..", "config.json");
+      const current = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (globalUpdates.emailPass === "••••••••") delete globalUpdates.emailPass;
+      const updated = { ...current, ...globalUpdates };
+      fs.writeFileSync(configPath, JSON.stringify(updated, null, 2), "utf-8");
+    }
+
+    const config = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "config.json"), "utf-8"));
+    const safeConfig = { ...config };
+    if (safeConfig.emailPass) safeConfig.emailPass = "••••••••";
+    delete safeConfig.autoReplyRules;
+    const tenantSettings = await autoReplyEngine.getSettings();
+    res.json({ success: true, settings: { ...safeConfig, ...tenantSettings } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
-// ==========================================
-// 5. ReserveFlow Appointments & Booking Engine
-// ==========================================
+
+// ==========================================================
+// 7. ReserveFlow Appointments & Booking Engine
+// ==========================================================
 app.get("/api/service", (req, res) => {
   res.json({ success: true, service: BookingEngine.getConfig() });
 });
@@ -633,36 +1056,26 @@ app.get("/api/availability", async (req, res) => {
 
 app.post("/api/bookings", async (req, res) => {
   try {
+    const client = whatsapp.getClient(req.userId);
     const booking = await BookingEngine.createBooking(req.body);
-    io.emit("new_booking", booking);
+    io.to(`user:${req.userId}`).emit("new_booking", booking);
 
     const dateFormatted = new Date(booking.startTime).toLocaleDateString("ar-EG", {
-      timeZone: "Africa/Cairo",
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric"
+      timeZone: "Africa/Cairo", weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
     const timeFormatted = new Date(booking.startTime).toLocaleTimeString("ar-EG", {
-      timeZone: "Africa/Cairo",
-      hour: "2-digit",
-      minute: "2-digit"
+      timeZone: "Africa/Cairo", hour: "2-digit", minute: "2-digit"
     });
 
-    // 1. Send confirmation WhatsApp message
     try {
-      if (whatsapp.isConnected && booking.customerPhone) {
+      if (client.isConnected && booking.customerPhone) {
         const msg = `🎉 تم تأكيد حجز موعدك بنجاح يا ${booking.customerName}!\n\n📋 *تفاصيل التذكرة والموعد:*\n- كود الحجز: *${booking.referenceCode}*\n- التاريخ: ${dateFormatted}\n- الوقت: ${timeFormatted} (بتوقيت القاهرة)\n- رمز الإلغاء: ${booking.cancelToken}\n\nشكراً لتواصلك معنا! ✨`;
-        await whatsapp.sendMessage(booking.customerPhone, msg);
-        console.log(`📱 [WhatsApp] Booking confirmation sent to ${booking.customerPhone}`);
-      } else {
-        console.log(`ℹ️ [WhatsApp] Client is not connected. WhatsApp booking message skipped.`);
+        await client.sendMessage(booking.customerPhone, msg);
       }
     } catch (msgErr) {
       console.warn("⚠️ WhatsApp booking notification error:", msgErr.message);
     }
 
-    // 2. Send confirmation Email via EmailNotifier
     try {
       if (booking.customerEmail) {
         await EmailNotifier.sendBookingConfirmation(booking);
@@ -690,7 +1103,7 @@ app.post("/api/bookings/:referenceCode/cancel", async (req, res) => {
   try {
     const { cancelToken } = req.body;
     const booking = await BookingEngine.cancelBooking(req.params.referenceCode, cancelToken);
-    io.emit("booking_cancelled", booking);
+    io.to(`user:${req.userId}`).emit("booking_cancelled", booking);
     if (booking && (booking.customerEmail || booking.customer_email)) {
       try {
         await EmailNotifier.sendCancellationNotification(booking);
@@ -704,11 +1117,10 @@ app.post("/api/bookings/:referenceCode/cancel", async (req, res) => {
   }
 });
 
-// MicroMind / Automation Tool Endpoint for Booking
 app.post("/api/tools/book-appointment", async (req, res) => {
   try {
-    console.log("⚡ [MicroMind Tool] Received book_appointment request:", req.body);
     const { customerName, customerPhone, customerEmail, startTime, notes, contactJid } = req.body;
+    const client = whatsapp.getClient(req.userId);
     const booking = await BookingEngine.createBooking({
       customerName,
       customerPhone: customerPhone || (contactJid ? contactJid.split("@")[0] : ""),
@@ -717,14 +1129,13 @@ app.post("/api/tools/book-appointment", async (req, res) => {
       notes,
       contactJid
     });
-    io.emit("new_booking", booking);
+    io.to(`user:${req.userId}`).emit("new_booking", booking);
 
-    // Send WhatsApp & Email
-    if (whatsapp.isConnected && booking.customerPhone) {
+    if (client.isConnected && booking.customerPhone) {
       const dateFormatted = new Date(booking.startTime).toLocaleDateString("ar-EG", { timeZone: "Africa/Cairo", weekday: "long", year: "numeric", month: "long", day: "numeric" });
       const timeFormatted = new Date(booking.startTime).toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo", hour: "2-digit", minute: "2-digit" });
       const msg = `🎉 تم تأكيد حجز موعدك بنجاح يا ${booking.customerName}!\n\n📋 *تفاصيل التذكرة والموعد:*\n- كود الحجز: *${booking.referenceCode}*\n- التاريخ: ${dateFormatted}\n- الوقت: ${timeFormatted} (بتوقيت القاهرة)\n- رمز الإلغاء: ${booking.cancelToken}\n\nشكراً لتواصلك معنا! ✨`;
-      await whatsapp.sendMessage(booking.customerPhone, msg);
+      await client.sendMessage(booking.customerPhone, msg);
     }
     if (booking.customerEmail) {
       await EmailNotifier.sendBookingConfirmation(booking);
@@ -737,4 +1148,4 @@ app.post("/api/tools/book-appointment", async (req, res) => {
   }
 });
 
-module.exports = { server, app };
+module.exports = { server, app, io };

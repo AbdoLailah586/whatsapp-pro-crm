@@ -103,10 +103,16 @@ npm install
 Create a `.env` file in the root directory (or copy `.env.example`):
 
 ```env
-PORT=3000
+PORT=5000
 
 # Neon PostgreSQL Database Connection
 DATABASE_URL=postgresql://user:password@ep-host.neon.tech/neondb?sslmode=require
+
+# Secret used to sign login sessions - generate your OWN random value, e.g.:
+#   node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+# Required on any host without a persistent disk (Railway, most PaaS) - otherwise
+# everyone gets logged out (and loses their saved WhatsApp session) on every redeploy.
+JWT_SECRET=
 
 # MicroMind AI Chatflow Endpoint
 MICROMIND_API_URL=https://core.aimicromind.com/api/v1/prediction/YOUR_CHATFLOW_ID
@@ -126,8 +132,32 @@ EMAIL_PORT=465
 npm start
 ```
 
-Open your browser and navigate to:
-Scan the QR code with your WhatsApp mobile app (**Linked Devices**) to start managing your chats!
+Open your browser, **create an account** (email + password) on the login screen that appears, then scan the QR code with your WhatsApp mobile app (**Linked Devices**) to start managing your chats!
+
+---
+
+## 👥 Multi-Account Isolation
+
+Every visitor now signs in with their own **email + password account**, created the first time they open the app. This fixes the original single-shared-inbox problem: each account gets its own, completely isolated WhatsApp connection, contacts, orders, bookings, campaigns, and automation rules - one account can never see another account's chats.
+
+* **Your existing data is safe.** The very first account ever registered on a deployment automatically inherits everything that already existed before this update (contacts, campaigns, the already-linked WhatsApp session, etc.) - so upgrading an existing deployment needs no manual data migration. Register that first account as yourself.
+* **The WhatsApp QR login now stays remembered per account, not per device or per browser.** The WhatsApp session credentials are stored in the database against your account, so logging in again (even after a redeploy, or from a different browser) restores the connection without rescanning a QR code, as long as you sign back in to the same website account.
+* Every friend/teammate you want to give access to the platform (not to *your* WhatsApp number) should **register their own account** - they'll get their own empty CRM and will need to link their own WhatsApp number via their own QR code.
+* Session cookies are `httpOnly` and signed with `JWT_SECRET` - always set a real, private value for that variable in production (see above).
+
+---
+
+## 📤 Export & Data Extraction
+
+A dedicated **"تصدير البيانات" (Export Data)** screen (rail icon on the left) lets you pull phone numbers out as a downloadable JSON file, with several source options:
+
+* All CRM contacts (optionally filtered by tag)
+* One or several WhatsApp groups you pick from a checklist
+* Every WhatsApp group at once
+* Automatic de-duplication across the combined results (a number that appears in multiple groups is only counted once, and the JSON shows which groups it came from)
+* Optional filters: admins-only, exclude admins, exclude a manual block-list of numbers, enrich with the contact's CRM name
+
+From the results panel you can also **copy all the numbers to the clipboard** in one click, or **save the extracted list as a saved audience** that instantly shows up when creating a new campaign - so you can go from "extract these group members" to "blast them a campaign" in two clicks.
 
 ---
 
@@ -185,9 +215,12 @@ npm run push
 ---
 
 ## 🔒 Security & Privacy Notice
-* WhatsApp authentication tokens (`auth_info/`) are excluded from version control via `.gitignore`.
+* WhatsApp authentication tokens (previously `auth_info/`, now stored per-account in the database) and local SQLite files (`data/`) are excluded from version control via `.gitignore`.
 * All database transactions utilize parameterized SQL queries to eliminate SQL injection vectors.
 * Secure TLS/SSL encryption is enforced for PostgreSQL and SMTP communication.
+* Every account's data (chats, contacts, WhatsApp session, orders, bookings, rules) is isolated from every other account - see **Multi-Account Isolation** above.
+* Login sessions are httpOnly cookies signed with `JWT_SECRET` - set a real secret value in production, never commit one to git.
+* **Never commit real credentials to `.env`, `config.json`, or any tracked file.** If a real database password or email app-password was ever committed to this repository's history, treat it as compromised and rotate it (change the Neon database password, generate a new Gmail App Password) even after removing it from the file - deleting a secret from a file does not remove it from git history.
 
 ---
 

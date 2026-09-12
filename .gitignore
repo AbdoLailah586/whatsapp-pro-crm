@@ -9,8 +9,9 @@ yarn-error.log*
 .env.local
 .env.production
 
-# Local Databases (PostgreSQL used in production)
-data/crm.db*
+# Local Databases (PostgreSQL used in production) & per-tenant SQLite files,
+# plus the auto-generated session-secret fallback file (data/.session_secret)
+data/
 
 # WhatsApp Auth & Uploads
 auth_info/

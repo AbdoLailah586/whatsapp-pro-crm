@@ -16,6 +16,10 @@ let appState = {
   orders: [],
   bookings: [],
   campaigns: [],
+  groups: [],
+  selectedGroupJids: new Set(),
+  audiencePresets: [],
+  activePresetId: null,
   analytics: null,
   rules: [],
   activityChart: null,
@@ -38,12 +42,12 @@ const elements = {
   qrLoader: document.getElementById("qrLoader"),
 
   // Navigation
+  // Navigation & Badges
   navItems: document.querySelectorAll(".nav-item"),
   tabPanels: document.querySelectorAll(".tab-panel"),
   inboxUnreadBadge: document.getElementById("inboxUnreadBadge"),
-  ordersBadge: document.getElementById("ordersBadge"),
 
-  // Inbox
+  // Inbox & Contacts
   contactsList: document.getElementById("contactsList"),
   contactSearchInput: document.getElementById("contactSearchInput"),
   tagFilterPills: document.querySelectorAll(".tag-filter-pills .pill"),
@@ -61,6 +65,7 @@ const elements = {
   sendTextBtn: document.getElementById("sendTextBtn"),
   sendVoiceBtn: document.getElementById("sendVoiceBtn"),
   quickRepliesSelect: document.getElementById("quickRepliesSelect"),
+
 
   // Orders
   ordersTableBody: document.getElementById("ordersTableBody"),
@@ -94,6 +99,23 @@ const elements = {
   campaignProgressPercent: document.getElementById("campaignProgressPercent"),
   campaignProgressBar: document.getElementById("campaignProgressBar"),
   campaignsHistoryList: document.getElementById("campaignsHistoryList"),
+
+  // Groups Selector & Presets Elements
+  campaignGroupsSelectorBox: document.getElementById("campaignGroupsSelectorBox"),
+  selectedGroupsCountBadge: document.getElementById("selectedGroupsCountBadge"),
+  selectAllGroupsBtn: document.getElementById("selectAllGroupsBtn"),
+  deselectAllGroupsBtn: document.getElementById("deselectAllGroupsBtn"),
+  invertGroupsSelectionBtn: document.getElementById("invertGroupsSelectionBtn"),
+  groupSearchInput: document.getElementById("groupSearchInput"),
+  refreshGroupsBtn: document.getElementById("refreshGroupsBtn"),
+  groupsCheckboxList: document.getElementById("groupsCheckboxList"),
+  presetNameInput: document.getElementById("presetNameInput"),
+  saveGroupPresetBtn: document.getElementById("saveGroupPresetBtn"),
+  presetDeleteWrap: document.getElementById("presetDeleteWrap"),
+  currentPresetNameLabel: document.getElementById("currentPresetNameLabel"),
+  deleteCurrentPresetBtn: document.getElementById("deleteCurrentPresetBtn"),
+  savedPresetsOptGroup: document.getElementById("savedPresetsOptGroup"),
+
 
   // Analytics
   statTotalContacts: document.getElementById("statTotalContacts"),
@@ -265,12 +287,28 @@ socket.on("campaign_progress", (data) => {
   elements.campaignProgressPercent.innerText = `${data.percent}%`;
   elements.campaignProgressBar.style.width = `${data.percent}%`;
 
-  if (data.status === "completed") {
+  if (data.status === "completed" || data.status === "cancelled") {
     setTimeout(() => {
-      alert("🎉 اكتمل إرسال الحملة التسويقية بنجاح!");
+      alert(`اكتمل إرسال الحملة التسويقية (الحالة: ${data.status})`);
       fetchCampaigns();
     }, 1000);
   }
+});
+
+socket.on("campaign_status_changed", (data) => {
+  const { campaignId, status } = data;
+  if (window.currentActiveCampaignId === campaignId) {
+    if (status === 'paused') {
+      document.getElementById("pauseCampaignBtn").style.display = "none";
+      document.getElementById("resumeCampaignBtn").style.display = "inline-block";
+      elements.campaignProgressText.innerText += " (متوقفة مؤقتاً)";
+    } else if (status === 'running') {
+      document.getElementById("pauseCampaignBtn").style.display = "inline-block";
+      document.getElementById("resumeCampaignBtn").style.display = "none";
+      elements.campaignProgressText.innerText = elements.campaignProgressText.innerText.replace(" (متوقفة مؤقتاً)", "");
+    }
+  }
+  fetchCampaigns();
 });
 
 socket.on("rules_updated", (data) => {
@@ -283,6 +321,12 @@ socket.on("rules_updated", (data) => {
     elements.botStatusText.innerText = data.botEnabled ? "مفعل للرد التلقائي" : "متوقف مؤقتاً";
   }
 });
+
+socket.on("audience_presets_updated", () => {
+  fetchAudiencePresets();
+});
+
+
 
 // ==========================================
 // Navigation & Tabs
@@ -1154,7 +1198,7 @@ window.cancelBookingBtn = async function(code, token) {
 };
 
 // ==========================================
-// Campaigns & Broadcast Engine
+// Campaigns & Broadcast Engine with Groups & Presets
 // ==========================================
 async function fetchCampaigns() {
   try {
@@ -1167,7 +1211,314 @@ async function fetchCampaigns() {
   } catch (e) {
     console.error("fetchCampaigns error:", e);
   }
+  // Also load groups and saved presets for the campaign selector
+  fetchGroups();
+  fetchAudiencePresets();
+  if (elements.campaignAudienceSelect) {
+    handleAudienceSelectChange(elements.campaignAudienceSelect.value);
+  }
 }
+
+
+// 1. Fetch all WhatsApp Groups
+async function fetchGroups(force = false) {
+  if (appState.groups.length > 0 && !force) {
+    renderGroupsCheckboxList(elements.groupSearchInput?.value || "");
+    return;
+  }
+
+  if (elements.groupsCheckboxList) {
+    elements.groupsCheckboxList.innerHTML = `
+      <div class="empty-state-sm">
+        <i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل مجموعات الواتساب...
+      </div>`;
+  }
+
+  try {
+    const res = await fetch("/api/groups");
+    const data = await res.json();
+    if (data.success && Array.isArray(data.groups)) {
+      appState.groups = data.groups;
+      
+      // If user is selecting groups for first time and has no selection, select all by default
+      if (appState.selectedGroupJids.size === 0 && elements.campaignAudienceSelect?.value === "groups") {
+        appState.groups.forEach((g) => appState.selectedGroupJids.add(g.jid));
+      }
+
+      renderGroupsCheckboxList(elements.groupSearchInput?.value || "");
+    } else {
+      if (elements.groupsCheckboxList) {
+        elements.groupsCheckboxList.innerHTML = `<div class="empty-state-sm">لم يتم العثور على أي مجموعات في هذا الحساب.</div>`;
+      }
+    }
+  } catch (err) {
+    console.error("fetchGroups error:", err);
+    if (elements.groupsCheckboxList) {
+      elements.groupsCheckboxList.innerHTML = `<div class="empty-state-sm text-danger">تعذر جلب المجموعات: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+// 2. Fetch and render Saved Audience Presets in Dropdown
+async function fetchAudiencePresets() {
+  try {
+    const res = await fetch("/api/audience-presets");
+    const data = await res.json();
+    if (data.success && Array.isArray(data.presets)) {
+      appState.audiencePresets = data.presets;
+      renderAudiencePresetsDropdown();
+    }
+  } catch (err) {
+    console.error("fetchAudiencePresets error:", err);
+  }
+}
+
+function renderAudiencePresetsDropdown() {
+  if (!elements.savedPresetsOptGroup) return;
+
+  if (appState.audiencePresets.length === 0) {
+    elements.savedPresetsOptGroup.innerHTML = `<option disabled value="">(لا توجد قوائم محفوظة بعد)</option>`;
+    return;
+  }
+
+  elements.savedPresetsOptGroup.innerHTML = appState.audiencePresets.map((p) => {
+    const count = Array.isArray(p.targetJids) ? p.targetJids.length : 0;
+    return `<option value="preset:${p.id}">📁 ${escapeHtml(p.name)} (${count} مجموعة)</option>`;
+  }).join("");
+}
+
+// 3. Render Groups Checkbox List with Search Filtering
+function renderGroupsCheckboxList(filterText = "") {
+  if (!elements.groupsCheckboxList) return;
+
+  const q = (filterText || "").trim().toLowerCase();
+  const filtered = appState.groups.filter((g) => {
+    if (!q) return true;
+    const name = (g.name || g.subject || "").toLowerCase();
+    const jid = (g.jid || "").toLowerCase();
+    return name.includes(q) || jid.includes(q);
+  });
+
+  if (filtered.length === 0) {
+    elements.groupsCheckboxList.innerHTML = `
+      <div class="empty-state-sm">
+        ${q ? "لا توجد مجموعات مطابقة لبحثك." : "لا توجد مجموعات متاحة."}
+      </div>`;
+    updateSelectedGroupsBadge();
+    return;
+  }
+
+  elements.groupsCheckboxList.innerHTML = filtered.map((g) => {
+    const isSelected = appState.selectedGroupJids.has(g.jid);
+    const count = g.participantCount ? `${g.participantCount} عضو` : "مجموعة";
+    const name = escapeHtml(g.name || g.subject || "مجموعة واتساب");
+
+    return `
+      <div class="group-item-row ${isSelected ? 'selected' : ''}" data-jid="${escapeHtml(g.jid)}">
+        <div class="group-item-main">
+          <input type="checkbox" class="group-item-checkbox" data-jid="${escapeHtml(g.jid)}" ${isSelected ? 'checked' : ''} />
+          <div class="group-item-avatar">
+            <i class="fa-solid fa-users"></i>
+          </div>
+          <div class="group-item-details">
+            <span class="group-item-name" title="${name}">${name}</span>
+            <span class="group-item-meta">${g.jid}</span>
+          </div>
+        </div>
+        <span class="group-item-badge">${count}</span>
+      </div>
+    `;
+  }).join("");
+
+  // Attach click listeners to rows and checkboxes
+  elements.groupsCheckboxList.querySelectorAll(".group-item-row").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      // If clicking directly on checkbox, let checkbox change handler handle it
+      if (e.target.classList.contains("group-item-checkbox")) {
+        toggleGroupSelection(e.target.getAttribute("data-jid"), e.target.checked);
+        return;
+      }
+      const jid = row.getAttribute("data-jid");
+      const checkbox = row.querySelector(".group-item-checkbox");
+      const newChecked = !checkbox.checked;
+      checkbox.checked = newChecked;
+      toggleGroupSelection(jid, newChecked);
+    });
+  });
+
+  updateSelectedGroupsBadge();
+}
+
+function toggleGroupSelection(jid, isSelected) {
+  if (isSelected) {
+    appState.selectedGroupJids.add(jid);
+  } else {
+    appState.selectedGroupJids.delete(jid);
+  }
+
+  // Update row UI class
+  const row = elements.groupsCheckboxList?.querySelector(`.group-item-row[data-jid="${jid}"]`);
+  if (row) {
+    if (isSelected) row.classList.add("selected");
+    else row.classList.remove("selected");
+  }
+
+  updateSelectedGroupsBadge();
+}
+
+function updateSelectedGroupsBadge() {
+  if (!elements.selectedGroupsCountBadge) return;
+  const total = appState.groups.length;
+  const selected = appState.selectedGroupJids.size;
+  const excluded = total - selected;
+
+  elements.selectedGroupsCountBadge.innerText = `تم تحديد ${selected} من أصل ${total} مجموعة (مستبعد: ${excluded})`;
+}
+
+// 4. Select All / Deselect All / Invert Groups Handlers
+function selectAllGroups() {
+  appState.groups.forEach((g) => appState.selectedGroupJids.add(g.jid));
+  renderGroupsCheckboxList(elements.groupSearchInput?.value || "");
+}
+
+function deselectAllGroups() {
+  appState.selectedGroupJids.clear();
+  renderGroupsCheckboxList(elements.groupSearchInput?.value || "");
+}
+
+function invertGroupsSelection() {
+  appState.groups.forEach((g) => {
+    if (appState.selectedGroupJids.has(g.jid)) {
+      appState.selectedGroupJids.delete(g.jid);
+    } else {
+      appState.selectedGroupJids.add(g.jid);
+    }
+  });
+  renderGroupsCheckboxList(elements.groupSearchInput?.value || "");
+}
+
+// 5. Save Current Selection as Preset
+async function saveCurrentGroupPreset() {
+  const name = elements.presetNameInput?.value.trim();
+  if (!name) {
+    alert("يرجى كتابة اسم للقائمة المحفوظة (مثال: جروبات الموردين)!");
+    elements.presetNameInput?.focus();
+    return;
+  }
+
+  if (appState.selectedGroupJids.size === 0) {
+    alert("يرجى تحديد مجموعة واحدة على الأقل قبل الحفظ!");
+    return;
+  }
+
+  const targetJids = Array.from(appState.selectedGroupJids);
+  const excludedJids = appState.groups
+    .filter((g) => !appState.selectedGroupJids.has(g.jid))
+    .map((g) => g.jid);
+
+  try {
+    const res = await fetch("/api/audience-presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        type: "groups",
+        targetJids,
+        excludedJids,
+      }),
+    });
+    const data = await res.json();
+    if (data.success && data.preset) {
+      alert(`🎉 تم حفظ قائمة "${name}" بنجاح! ستجدها دائماً في قائمة استهداف الجمهور.`);
+      elements.presetNameInput.value = "";
+      await fetchAudiencePresets();
+      
+      // Auto-select the newly created preset
+      if (elements.campaignAudienceSelect) {
+        elements.campaignAudienceSelect.value = `preset:${data.preset.id}`;
+        handleAudienceSelectChange(`preset:${data.preset.id}`);
+      }
+    } else {
+      alert("حدث خطأ أثناء الحفظ: " + (data.error || "غير معروف"));
+    }
+  } catch (err) {
+    alert("تعذر حفظ القائمة: " + err.message);
+  }
+}
+
+// 6. Delete Active Preset
+async function deleteCurrentPreset() {
+  const selectVal = elements.campaignAudienceSelect?.value || "";
+  if (!selectVal.startsWith("preset:")) return;
+
+  const presetId = selectVal.replace("preset:", "");
+  const preset = appState.audiencePresets.find((p) => p.id === presetId);
+  const presetName = preset ? preset.name : "هذه القائمة";
+
+  if (!confirm(`هل أنت متأكد من حذف قائمة "${presetName}" نهائياً؟`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/audience-presets/${presetId}`, {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert("تم حذف القائمة بنجاح.");
+      await fetchAudiencePresets();
+      elements.campaignAudienceSelect.value = "groups";
+      handleAudienceSelectChange("groups");
+    } else {
+      alert("خطأ: " + data.error);
+    }
+  } catch (err) {
+    alert("تعذر حذف القائمة: " + err.message);
+  }
+}
+
+// 7. Handle Audience Dropdown Change
+function handleAudienceSelectChange(val) {
+  if (!elements.campaignGroupsSelectorBox) return;
+
+  if (val === "groups") {
+    elements.campaignGroupsSelectorBox.style.display = "flex";
+    if (elements.customNumbersGroup) elements.customNumbersGroup.style.display = "none";
+    if (elements.presetDeleteWrap) elements.presetDeleteWrap.style.display = "none";
+    
+    // Default select all groups if empty
+    if (appState.selectedGroupJids.size === 0 && appState.groups.length > 0) {
+      appState.groups.forEach((g) => appState.selectedGroupJids.add(g.jid));
+    }
+    fetchGroups();
+  } else if (val && val.startsWith("preset:")) {
+    const presetId = val.replace("preset:", "");
+    const preset = appState.audiencePresets.find((p) => p.id === presetId);
+    
+    elements.campaignGroupsSelectorBox.style.display = "flex";
+    if (elements.customNumbersGroup) elements.customNumbersGroup.style.display = "none";
+    
+    if (preset) {
+      if (elements.presetDeleteWrap) {
+        elements.presetDeleteWrap.style.display = "flex";
+        if (elements.currentPresetNameLabel) {
+          elements.currentPresetNameLabel.innerText = `القائمة النشطة: ${preset.name} (${preset.targetJids?.length || 0} مجموعة)`;
+        }
+      }
+      appState.selectedGroupJids = new Set(preset.targetJids || []);
+    }
+    fetchGroups();
+  } else if (val === "custom") {
+    elements.campaignGroupsSelectorBox.style.display = "none";
+    if (elements.customNumbersGroup) elements.customNumbersGroup.style.display = "block";
+    if (elements.presetDeleteWrap) elements.presetDeleteWrap.style.display = "none";
+  } else {
+    elements.campaignGroupsSelectorBox.style.display = "none";
+    if (elements.customNumbersGroup) elements.customNumbersGroup.style.display = "none";
+    if (elements.presetDeleteWrap) elements.presetDeleteWrap.style.display = "none";
+  }
+}
+
 
 function renderCampaignsHistory() {
   if (!appState.campaigns || appState.campaigns.length === 0) {
@@ -1184,20 +1535,62 @@ function renderCampaignsHistory() {
           <span class="tag-badge ${c.status === 'completed' ? 'ordered' : 'new'}">${c.status === 'completed' ? 'مكتملة' : 'جارية'}</span>
         </div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;">${escapeHtml(c.message_template)}</p>
-        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-dim);">
           <span>🎯 المستهدف: ${c.target_count} | ✅ تم: ${c.sent_count} | ❌ فشل: ${c.failed_count}</span>
           <span>${dateFormatted}</span>
+        </div>
+        <div style="margin-top: 10px; display: flex; gap: 8px;">
+          <button class="btn-sm btn-secondary" onclick="viewCampaignDetails('${c.id}', '${escapeHtml(c.title).replace(/'/g, "\\'")}', '${c.status}', ${c.target_count}, ${c.sent_count}, ${c.failed_count})">
+            <i class="fa-solid fa-list"></i> التفاصيل
+          </button>
         </div>
       </div>
     `;
   }).join("");
 }
 
+window.viewCampaignDetails = async function(id, title, status, targetCount, sentCount, failedCount) {
+  const modal = document.getElementById("campaignDetailsModal");
+  if (!modal) return;
+  
+  document.getElementById("detailsCampaignTitle").innerText = title;
+  const statusAr = status === 'completed' ? 'مكتملة' : status === 'running' ? 'جارية' : status === 'paused' ? 'متوقفة مؤقتاً' : status === 'cancelled' ? 'ملغية' : status;
+  document.getElementById("detailsCampaignStats").innerText = `الحالة: ${statusAr} | مستهدف: ${targetCount} | تم الإرسال: ${sentCount} | فشل: ${failedCount}`;
+  
+  const tbody = document.getElementById("campaignLogsTableBody");
+  tbody.innerHTML = `<tr><td colspan="4" class="text-center">جاري التحميل...</td></tr>`;
+  modal.style.display = "flex";
+
+  try {
+    const res = await fetch(`/api/campaigns/${id}/logs`);
+    const data = await res.json();
+    if (data.success && data.logs.length > 0) {
+      tbody.innerHTML = data.logs.map(log => {
+        const d = new Date(Number(log.sent_at)).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" });
+        return `
+          <tr>
+            <td dir="ltr" style="text-align: right;">${log.phone}</td>
+            <td><span class="tag-badge ${log.status === 'success' ? 'ordered' : 'support'}">${log.status === 'success' ? 'نجاح' : 'فشل'}</span></td>
+            <td><small>${log.error_message || "-"}</small></td>
+            <td><small>${d}</small></td>
+          </tr>
+        `;
+      }).join("");
+    } else {
+      tbody.innerHTML = `<tr><td colspan="4" class="text-center">لا يوجد سجل إرسال لهذه الحملة</td></tr>`;
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger">فشل جلب السجل</td></tr>`;
+  }
+}
+
+// 8. Start Campaign with Groups & Contacts Support
 async function startCampaign() {
   const title = elements.campaignTitle.value.trim();
   const template = elements.campaignTemplate.value.trim();
   const audience = elements.campaignAudienceSelect.value;
   const delaySeconds = Number(elements.campaignDelay.value) || 8;
+  const campaignImage = document.getElementById("campaignImage") ? document.getElementById("campaignImage").files[0] : null;
 
   if (!title || !template) {
     alert("يرجى كتابة عنوان الحملة ونموذج الرسالة!");
@@ -1205,24 +1598,41 @@ async function startCampaign() {
   }
 
   let contacts = [];
-  if (audience === "custom") {
+  let targetTypeLabel = "عميل";
+
+  if (audience === "groups" || audience.startsWith("preset:")) {
+    targetTypeLabel = "مجموعة واتساب";
+    if (appState.selectedGroupJids.size === 0) {
+      alert("يرجى تحديد مجموعة واحدة على الأقل لإرسال الحملة إليها!");
+      return;
+    }
+
+    contacts = Array.from(appState.selectedGroupJids).map((jid) => {
+      const g = appState.groups.find((x) => x.jid === jid);
+      return {
+        jid,
+        name: g ? (g.name || g.subject) : "مجموعة واتساب",
+        phone: jid,
+      };
+    });
+  } else if (audience === "custom") {
     const rawNumbers = elements.campaignCustomNumbers.value.split(/[\n,]+/);
     contacts = rawNumbers.map((n) => n.trim()).filter((n) => n.length > 5);
   } else if (audience === "all") {
-    contacts = appState.contacts.map((c) => ({ phone: c.phone || c.jid.split("@")[0], name: c.name }));
+    contacts = appState.contacts.map((c) => ({ phone: c.phone || c.jid.split("@")[0], name: c.name, jid: c.jid }));
   } else {
     // Filter by tag
     contacts = appState.contacts
       .filter((c) => c.status_tag === audience)
-      .map((c) => ({ phone: c.phone || c.jid.split("@")[0], name: c.name }));
+      .map((c) => ({ phone: c.phone || c.jid.split("@")[0], name: c.name, jid: c.jid }));
   }
 
   if (contacts.length === 0) {
-    alert("لم يتم العثور على أي أرقام مطابقة للجمهور المستهدف!");
+    alert("لم يتم العثور على أي أرقام أو مجموعات مطابقة للجمهور المستهدف!");
     return;
   }
 
-  if (!confirm(`هل أنت متأكد من إطلاق الحملة إلى ${contacts.length} عميل بفاصل ${delaySeconds} ثواني؟`)) {
+  if (!confirm(`هل أنت متأكد من إطلاق الحملة إلى ${contacts.length} ${targetTypeLabel} بفاصل ${delaySeconds} ثواني بين كل رسالة؟`)) {
     return;
   }
 
@@ -1230,14 +1640,26 @@ async function startCampaign() {
   elements.campaignProgressBox.style.display = "block";
 
   try {
+    const formData = new FormData();
+    formData.append("title", title);
+    formData.append("template", template);
+    formData.append("delaySeconds", delaySeconds);
+    formData.append("contacts", JSON.stringify(contacts));
+    if (campaignImage) {
+      formData.append("image", campaignImage);
+    }
+
     const res = await fetch("/api/campaigns", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, template, contacts, delaySeconds }),
+      body: formData,
     });
     const data = await res.json();
     if (!data.success) {
       alert("خطأ: " + data.error);
+    } else {
+      window.currentActiveCampaignId = data.result.campaignId;
+      document.getElementById("pauseCampaignBtn").style.display = "inline-block";
+      document.getElementById("resumeCampaignBtn").style.display = "none";
     }
   } catch (err) {
     alert("حدث خطأ أثناء بدء الحملة: " + err.message);
@@ -1245,6 +1667,30 @@ async function startCampaign() {
     elements.startCampaignBtn.disabled = false;
   }
 }
+
+async function controlCampaign(action) {
+  if (!window.currentActiveCampaignId) return;
+  try {
+    const res = await fetch(`/api/campaigns/${window.currentActiveCampaignId}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (action === 'cancel') {
+        elements.campaignProgressBox.style.display = "none";
+        window.currentActiveCampaignId = null;
+        alert("تم إلغاء الحملة");
+      }
+    } else {
+      alert(data.error || "Failed to control campaign");
+    }
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
 
 // ==========================================
 // Analytics Tab
@@ -1498,12 +1944,111 @@ function setupEventListeners() {
   });
 
   // Audience select for campaign
-  elements.campaignAudienceSelect.addEventListener("change", (e) => {
-    elements.customNumbersGroup.style.display = e.target.value === "custom" ? "block" : "none";
-  });
+  if (elements.campaignAudienceSelect) {
+    elements.campaignAudienceSelect.addEventListener("change", (e) => {
+      handleAudienceSelectChange(e.target.value);
+    });
+  }
+
+  // Groups Selector Buttons
+  if (elements.selectAllGroupsBtn) {
+    elements.selectAllGroupsBtn.addEventListener("click", selectAllGroups);
+  }
+  if (elements.deselectAllGroupsBtn) {
+    elements.deselectAllGroupsBtn.addEventListener("click", deselectAllGroups);
+  }
+  if (elements.invertGroupsSelectionBtn) {
+    elements.invertGroupsSelectionBtn.addEventListener("click", invertGroupsSelection);
+  }
+  if (elements.refreshGroupsBtn) {
+    elements.refreshGroupsBtn.addEventListener("click", () => fetchGroups(true));
+  }
+  if (elements.groupSearchInput) {
+    elements.groupSearchInput.addEventListener("input", (e) => {
+      renderGroupsCheckboxList(e.target.value);
+    });
+  }
+  if (elements.saveGroupPresetBtn) {
+    elements.saveGroupPresetBtn.addEventListener("click", saveCurrentGroupPreset);
+  }
+  if (elements.deleteCurrentPresetBtn) {
+    elements.deleteCurrentPresetBtn.addEventListener("click", deleteCurrentPreset);
+  }
 
   // Start campaign button
-  elements.startCampaignBtn.addEventListener("click", startCampaign);
+  if (elements.startCampaignBtn) {
+    elements.startCampaignBtn.addEventListener("click", startCampaign);
+  }
+
+  // Clear Image Btn
+  const clearImgBtn = document.getElementById("clearCampaignImageBtn");
+  const campImg = document.getElementById("campaignImage");
+  if (clearImgBtn && campImg) {
+    clearImgBtn.addEventListener("click", () => {
+      campImg.value = "";
+    });
+  }
+
+  // Campaign Controls
+  const pauseBtn = document.getElementById("pauseCampaignBtn");
+  const resumeBtn = document.getElementById("resumeCampaignBtn");
+  const cancelBtn = document.getElementById("cancelCampaignBtn");
+  
+  if (pauseBtn) pauseBtn.addEventListener("click", () => controlCampaign("pause"));
+  if (resumeBtn) resumeBtn.addEventListener("click", () => controlCampaign("resume"));
+  if (cancelBtn) cancelBtn.addEventListener("click", () => {
+    if (confirm("هل أنت متأكد من إلغاء هذه الحملة نهائياً؟")) {
+      controlCampaign("cancel");
+    }
+  });
+
+  // Details Modal
+  const closeDetailsBtn = document.getElementById("closeCampaignDetailsModalBtn");
+  const closeDetailsFooterBtn = document.getElementById("closeCampaignDetailsFooterBtn");
+  const detailsModal = document.getElementById("campaignDetailsModal");
+  if (closeDetailsBtn && detailsModal) {
+    closeDetailsBtn.addEventListener("click", () => detailsModal.style.display = "none");
+    closeDetailsFooterBtn.addEventListener("click", () => detailsModal.style.display = "none");
+  }
+
+  // Export Data
+  const exportDataBtn = document.getElementById("exportDataBtn");
+  if (exportDataBtn) {
+    exportDataBtn.addEventListener("click", async () => {
+      const tag = document.getElementById("exportTagSelect")?.value || "all";
+      const groupJid = document.getElementById("exportGroupSelect")?.value || "";
+      
+      try {
+        exportDataBtn.disabled = true;
+        exportDataBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التصدير...';
+        
+        const res = await fetch(`/api/export/contacts?tag=${encodeURIComponent(tag)}&groupJid=${encodeURIComponent(groupJid)}`);
+        const data = await res.json();
+        
+        if (data.success && data.data && data.data.length > 0) {
+          const jsonStr = JSON.stringify(data.data, null, 2);
+          const blob = new Blob([jsonStr], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `exported_contacts_${new Date().getTime()}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          alert(`تم تصدير ${data.count} جهة اتصال بنجاح.`);
+        } else {
+          alert("لا توجد بيانات مطابقة للتصدير.");
+        }
+      } catch (err) {
+        alert("فشل التصدير: " + err.message);
+      } finally {
+        exportDataBtn.disabled = false;
+        exportDataBtn.innerHTML = '<i class="fa-solid fa-download"></i> تصدير البيانات (JSON)';
+      }
+    });
+  }
+
 
   // Refresh Analytics
   elements.refreshAnalyticsBtn.addEventListener("click", fetchAnalytics);
@@ -1816,6 +2361,22 @@ function loadInitialData() {
   fetchContacts();
   fetchOrders();
   fetchBookings();
+  populateExportGroupSelect();
+}
+
+async function populateExportGroupSelect() {
+  const exportGroupSelect = document.getElementById("exportGroupSelect");
+  if (!exportGroupSelect) return;
+  try {
+    const res = await fetch("/api/groups");
+    const data = await res.json();
+    if (data.success && data.groups && data.groups.length > 0) {
+      exportGroupSelect.innerHTML = `<option value="">بدون تحديد (استخدام التصنيف أعلاه)</option>` + 
+        data.groups.map(g => `<option value="${escapeHtml(g.jid)}">${escapeHtml(g.name || g.subject)}</option>`).join("");
+    }
+  } catch (err) {
+    console.error("Failed to load groups for export", err);
+  }
 }
 
 function updateWebhookUrls() {

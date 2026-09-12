@@ -317,14 +317,14 @@ class BookingEngine {
   async getAllBookings() {
     if (crmDB.isPostgres) {
       try {
-        const res = await crmDB.pgPool.query("SELECT * FROM bookings_appointments ORDER BY start_time ASC");
+        const res = await crmDB.q("SELECT * FROM bookings_appointments ORDER BY start_time ASC");
         return res.rows;
       } catch (e) {
         return [];
       }
     }
     try {
-      return crmDB.sqliteDb.prepare("SELECT * FROM bookings_appointments ORDER BY start_time ASC").all();
+      return crmDB.db.prepare("SELECT * FROM bookings_appointments ORDER BY start_time ASC").all();
     } catch (e) {
       return [];
     }
@@ -333,7 +333,7 @@ class BookingEngine {
   async saveBookingToDB(b) {
     if (crmDB.isPostgres) {
       try {
-        const res = await crmDB.pgPool.query(`
+        const res = await crmDB.q(`
           INSERT INTO bookings_appointments (reference_code, start_time, end_time, slot_end_time, customer_name, customer_email, customer_phone, notes, status, cancel_token, contact_jid, created_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING id
@@ -359,7 +359,7 @@ class BookingEngine {
     }
 
     try {
-      const stmt = crmDB.sqliteDb.prepare(`
+      const stmt = crmDB.db.prepare(`
         INSERT INTO bookings_appointments (reference_code, start_time, end_time, slot_end_time, customer_name, customer_email, customer_phone, notes, status, cancel_token, contact_jid, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
@@ -386,9 +386,9 @@ class BookingEngine {
 
   async updateBookingStatusInDB(id, status) {
     if (crmDB.isPostgres) {
-      return crmDB.pgPool.query("UPDATE bookings_appointments SET status = $1 WHERE id = $2", [status, id]);
+      return crmDB.q("UPDATE bookings_appointments SET status = $1 WHERE id = $2", [status, id]);
     }
-    return crmDB.sqliteDb.prepare("UPDATE bookings_appointments SET status = ? WHERE id = ?").run(status, id);
+    return crmDB.db.prepare("UPDATE bookings_appointments SET status = ? WHERE id = ?").run(status, id);
   }
 }
 

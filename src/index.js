@@ -1,15 +1,86 @@
+const fs = require("fs");
+const path = require("path");
 const { server } = require("./server");
 const whatsapp = require("./whatsapp");
-const autoReplyEngine = require("./autoReply");
+const crmDB = require("./database");
+const { runAsTenant, LEGACY_TENANT } = require("./tenant");
 
-const PORT = process.env.PORT || autoReplyEngine.config.port || 3000;
+let PORT = process.env.PORT || 5000;
+try {
+  const configPath = path.join(__dirname, "..", "config.json");
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    PORT = process.env.PORT || config.port || 5000;
+  }
+} catch (e) {}
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`====================================================`);
-  console.log(`🚀 WhatsApp Pro Dashboard is running at:`);
-  console.log(`👉 Port: ${PORT}`);
-  console.log(`====================================================`);
+// One-time bridge from the pre-multi-tenant setup (config.json rules,
+// the already-linked WhatsApp session on disk) into the new per-account
+// database storage, so upgrading to accounts does not lose anything or
+// force a fresh QR scan for the account that already existed.
+async function migrateLegacyDataOnce() {
+  await runAsTenant(LEGACY_TENANT, async () => {
+    try {
+      const configPath = path.join(__dirname, "..", "config.json");
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
-  // Start WhatsApp Client
-  whatsapp.start();
+        const existingRules = await crmDB.getAutoReplyRules();
+        if (existingRules.length === 0 && Array.isArray(config.autoReplyRules) && config.autoReplyRules.length > 0) {
+          for (const r of config.autoReplyRules) {
+            if (!r || !r.keyword || !r.response) continue;
+            await crmDB.addAutoReplyRule({
+              id: r.id,
+              keyword: r.keyword,
+              matchType: r.matchType,
+              response: r.response,
+              active: r.active !== false,
+            });
+          }
+          console.log(`[Migration] Imported ${config.autoReplyRules.length} legacy auto-reply rules into the database.`);
+        }
+
+        const currentSettings = await crmDB.kvGet("bot_settings");
+        if (!currentSettings) {
+          await crmDB.setBotSettings({
+            botEnabled: config.botEnabled !== false,
+            aiMode: config.aiMode || "",
+            microMindApiUrl: config.microMindApiUrl || "",
+            googleSheetWebhookUrl: config.googleSheetWebhookUrl || "",
+          });
+          console.log("[Migration] Imported legacy bot settings into the database.");
+        }
+      }
+    } catch (e) {
+      console.warn("[Migration] Legacy config -> database seed notice:", e.message);
+    }
+
+    try {
+      const existingCreds = await crmDB.getAuthBlob(LEGACY_TENANT, "creds");
+      if (!existingCreds) {
+        const oldCredsPath = path.join(__dirname, "..", "auth_info", "creds.json");
+        if (fs.existsSync(oldCredsPath)) {
+          const raw = fs.readFileSync(oldCredsPath, "utf-8");
+          await crmDB.setAuthBlob(LEGACY_TENANT, "creds", raw);
+          console.log("[Migration] Imported the existing WhatsApp login into the database - no new QR scan needed.");
+        }
+      }
+    } catch (e) {
+      console.warn("[Migration] Legacy WhatsApp credential import notice:", e.message);
+    }
+  });
+}
+
+migrateLegacyDataOnce().finally(() => {
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`====================================================`);
+    console.log(`🚀 WhatsApp Pro Dashboard is running at:`);
+    console.log(`👉 Port: ${PORT}`);
+    console.log(`====================================================`);
+
+    // Auto-connect the original ("legacy") account's WhatsApp session on boot,
+    // exactly like before multi-tenancy. Every other account's WhatsApp
+    // connection starts lazily the first time that account is used.
+    whatsapp.bootLegacy();
+  });
 });

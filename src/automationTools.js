@@ -19,6 +19,8 @@ function loadConfig() {
 }
 
 class AutomationTools {
+  static campaignState = {}; // campaignId -> 'running', 'paused', 'cancelled'
+
   // 1. Record Lead / Order & Sync with Google Sheets & Email
   static async recordOrderLead({ contactJid, customerName, phone, customerEmail, orderDetails, address, totalPrice }) {
     try {
@@ -232,15 +234,19 @@ class AutomationTools {
       // Convert MP3 to WhatsApp-compliant Opus OGG format for perfect Mobile (Android/iOS) and Web playback
       const { buffer: sendBuffer, mimetype, isOgg } = await AutomationTools.convertMp3ToWhatsAppOgg(mp3Buffer);
 
-      // Save to disk for web dashboard playback
-      const uploadsDir = path.join(__dirname, "public", "uploads");
+      // Save to disk for web dashboard playback (this account's own uploads folder)
+      const uploadsDir = typeof whatsappInstance.uploadsDir === "function"
+        ? whatsappInstance.uploadsDir()
+        : path.join(__dirname, "public", "uploads");
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
       }
       const ext = isOgg ? "ogg" : "mp3";
       const fileName = `voice_${Date.now()}.${ext}`;
       fs.writeFileSync(path.join(uploadsDir, fileName), sendBuffer);
-      const mediaUrl = `/uploads/${fileName}`;
+      const mediaUrl = typeof whatsappInstance.uploadsUrl === "function"
+        ? whatsappInstance.uploadsUrl(fileName)
+        : `/uploads/${fileName}`;
 
       // Send as native WhatsApp Voice Note (ptt: true)
       await whatsappInstance.socket.sendMessage(jid, {
@@ -258,7 +264,7 @@ class AutomationTools {
   }
 
   // 3. Campaign Sender with Anti-Ban Random Delay
-  static async runCampaign(whatsappInstance, { title, template, contacts, delaySeconds = 8, ioEmitter = null }) {
+  static async runCampaign(whatsappInstance, { title, template, contacts, imagePath, delaySeconds = 8, ioEmitter = null }) {
     if (!whatsappInstance || !whatsappInstance.socket) {
       throw new Error("WhatsApp is not connected.");
     }
@@ -269,30 +275,81 @@ class AutomationTools {
 
     // Run async in background
     (async () => {
+      AutomationTools.campaignState[campaignId] = 'running';
+
       for (let i = 0; i < contacts.length; i++) {
-        const target = contacts[i];
-        let rawPhone = typeof target === "string" ? target : (target.phone || target.jid || "");
-        const name = (typeof target === "object" && target.name) ? target.name : "عزيزي العميل";
-        
-        let cleanPhone = rawPhone.replace(/\D/g, "");
-        if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
-          cleanPhone = "2" + cleanPhone;
+        // Handle Pause / Cancel
+        while (AutomationTools.campaignState[campaignId] === 'paused') {
+          await new Promise((r) => setTimeout(r, 1000));
         }
-        const jid = `${cleanPhone}@s.whatsapp.net`;
+        if (AutomationTools.campaignState[campaignId] === 'cancelled') {
+          await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cancelled");
+          if (ioEmitter) {
+            ioEmitter("campaign_progress", {
+              campaignId,
+              sentCount,
+              failedCount,
+              total: contacts.length,
+              status: "cancelled",
+              percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
+            });
+          }
+          break;
+        }
+
+        const target = contacts[i];
+        let jid = "";
+        let displayName = "";
+        let logIdentifier = "";
+
+        if (typeof target === "string") {
+          if (target.includes("@g.us") || target.includes("@s.whatsapp.net")) {
+            jid = target;
+            logIdentifier = target;
+            displayName = target.includes("@g.us") ? "مجموعة واتساب" : "عزيزي العميل";
+          } else {
+            let cleanPhone = target.replace(/\D/g, "");
+            if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
+              cleanPhone = "2" + cleanPhone;
+            }
+            jid = `${cleanPhone}@s.whatsapp.net`;
+            logIdentifier = cleanPhone;
+            displayName = "عزيزي العميل";
+          }
+        } else if (typeof target === "object" && target) {
+          displayName = target.name || target.subject || (target.jid?.includes("@g.us") ? "مجموعة واتساب" : "عزيزي العميل");
+          if (target.jid && (target.jid.includes("@g.us") || target.jid.includes("@s.whatsapp.net"))) {
+            jid = target.jid;
+            logIdentifier = target.jid.includes("@g.us") ? (target.name || target.jid) : (target.phone || target.jid.split("@")[0]);
+          } else {
+            let rawPhone = target.phone || target.jid || "";
+            let cleanPhone = rawPhone.replace(/\D/g, "");
+            if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
+              cleanPhone = "2" + cleanPhone;
+            }
+            jid = `${cleanPhone}@s.whatsapp.net`;
+            logIdentifier = cleanPhone;
+          }
+        }
 
         // Personalize template
         const personalizedMsg = template
-          .replace(/{name}/g, name)
-          .replace(/{phone}/g, cleanPhone);
+          .replace(/{name}/g, displayName)
+          .replace(/{phone}/g, logIdentifier);
 
         try {
-          await whatsappInstance.sendMessage(jid, personalizedMsg);
+          let imageBuffer = null;
+          if (imagePath) {
+            const fs = require("fs");
+            imageBuffer = fs.readFileSync(imagePath);
+          }
+          await whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer);
           sentCount++;
-          await crmDB.logCampaignItem(campaignId, cleanPhone, "sent");
+          await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
         } catch (err) {
           failedCount++;
-          console.error(`[Campaign] Failed sending to ${cleanPhone}:`, err.message);
-          await crmDB.logCampaignItem(campaignId, cleanPhone, "failed", err.message);
+          console.error(`[Campaign] Failed sending to ${logIdentifier}:`, err.message);
+          await crmDB.logCampaignItem(campaignId, logIdentifier, "failed", err.message);
         }
 
         const isLast = i === contacts.length - 1;
@@ -317,6 +374,8 @@ class AutomationTools {
           await new Promise((r) => setTimeout(r, finalDelay));
         }
       }
+      
+      delete AutomationTools.campaignState[campaignId];
     })();
 
     return { success: true, campaignId, total: contacts.length };

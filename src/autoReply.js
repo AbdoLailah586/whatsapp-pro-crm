@@ -1,112 +1,65 @@
-const fs = require("fs");
-const path = require("path");
 const crmDB = require("./database");
 
-const CONFIG_PATH = path.join(__dirname, "..", "config.json");
-
+// Auto-reply rules and bot settings now live per-tenant in the database
+// (see database.js: getBotSettings/getAutoReplyRules) instead of the
+// shared config.json file, so every account's bot behaves independently.
 class AutoReplyEngine {
-  constructor() {
-    this.config = this.loadConfig();
+  async getSettings() {
+    return crmDB.getBotSettings();
   }
 
-  loadConfig() {
-    try {
-      if (fs.existsSync(CONFIG_PATH)) {
-        const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-        return JSON.parse(raw);
-      }
-    } catch (e) {
-      console.error("Error reading config.json:", e);
-    }
-    return {
-      port: 3000,
-      botEnabled: true,
-      autoReplyRules: [],
-    };
+  async isBotEnabled() {
+    const s = await this.getSettings();
+    return !!s.botEnabled;
   }
 
-  saveConfig() {
-    try {
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2), "utf-8");
-      return true;
-    } catch (e) {
-      console.error("Error saving config.json:", e);
-      return false;
-    }
+  async setBotEnabled(enabled) {
+    const s = await crmDB.setBotSettings({ botEnabled: !!enabled });
+    return s.botEnabled;
   }
 
-  isBotEnabled() {
-    return !!this.config.botEnabled;
+  async getRules() {
+    return crmDB.getAutoReplyRules();
   }
 
-  setBotEnabled(enabled) {
-    this.config.botEnabled = !!enabled;
-    this.saveConfig();
-    return this.config.botEnabled;
-  }
-
-  getRules() {
-    return this.config.autoReplyRules || [];
-  }
-
-  addRule(rule) {
-    const newRule = {
-      id: Date.now().toString(),
-      keyword: rule.keyword.trim(),
+  async addRule(rule) {
+    if (!rule || !rule.keyword || !rule.response) return null;
+    return crmDB.addAutoReplyRule({
+      keyword: String(rule.keyword).trim(),
       matchType: rule.matchType || "contains",
-      response: rule.response.trim(),
+      response: String(rule.response).trim(),
       active: rule.active !== false,
-    };
-    this.config.autoReplyRules.push(newRule);
-    this.saveConfig();
-    return newRule;
+    });
   }
 
-  updateRule(id, updatedFields) {
-    const index = this.config.autoReplyRules.findIndex((r) => r.id === id);
-    if (index !== -1) {
-      this.config.autoReplyRules[index] = {
-        ...this.config.autoReplyRules[index],
-        ...updatedFields,
-      };
-      this.saveConfig();
-      return this.config.autoReplyRules[index];
-    }
-    return null;
+  async updateRule(id, updatedFields) {
+    return crmDB.updateAutoReplyRule(id, updatedFields || {});
   }
 
-  deleteRule(id) {
-    const initialLen = this.config.autoReplyRules.length;
-    this.config.autoReplyRules = this.config.autoReplyRules.filter((r) => r.id !== id);
-    if (this.config.autoReplyRules.length !== initialLen) {
-      this.saveConfig();
-      return true;
-    }
-    return false;
+  async deleteRule(id) {
+    return crmDB.deleteAutoReplyRule(id);
   }
 
   async findResponse(text, senderId, uploads = []) {
-    if (!this.isBotEnabled() || (!text && (!uploads || uploads.length === 0))) return null;
+    const settings = await this.getSettings();
+    if (!settings.botEnabled || (!text && (!uploads || uploads.length === 0))) return null;
     const cleanText = (text || "").trim();
 
-    // 1. Check if MicroMind AI Mode is active
-    if (this.config.aiMode === "micromind" && this.config.microMindApiUrl) {
+    // 1. Check if MicroMind AI Mode is active for this account
+    if (settings.aiMode === "micromind" && settings.microMindApiUrl) {
       try {
         const isAudioUpload = uploads && uploads.length > 0 && uploads.some(u => u.type === "audio");
-        
-        // Fetch current customer data
+
         const rawPhone = (senderId || "").split("@")[0].replace(/\D/g, "");
         let contact = null;
         try {
           contact = await crmDB.getContact(senderId);
         } catch (e) {}
 
-        const customerPhone = (contact && contact.phone && contact.phone !== rawPhone) ? contact.phone : (rawPhone || "01558909252");
-        const customerName = contact?.name || "عبدالله";
-        const customerEmail = "blylh91@gmail.com";
+        const customerPhone = (contact && contact.phone && contact.phone !== rawPhone) ? contact.phone : (rawPhone || "");
+        const customerName = contact?.name || "";
         const statusTag = contact?.status_tag || "new";
-        
-        // Generate real-time Cairo date & time
+
         const cairoDateTime = new Date().toLocaleString("ar-EG", {
           timeZone: "Africa/Cairo",
           dateStyle: "full",
@@ -117,16 +70,14 @@ class AutoReplyEngine {
 - معرف الواتساب (contact_jid): ${senderId}
 - رقم الهاتف (phone): ${customerPhone}
 - الاسم: ${customerName}
-- البريد الإلكتروني (email): ${customerEmail}
 - التصنيف: ${statusTag}
 - تاريخ ووقت مصر الآن: ${cairoDateTime}`;
 
-        const finalQuestion = isAudioUpload 
-          ? "" 
+        const finalQuestion = isAudioUpload
+          ? ""
           : `${customerContext}\n\n[رسالة العميل]:\n${cleanText || (uploads && uploads.length > 0 ? "يرجى تحليل المرفق بدقة" : "")}`;
 
         const payload = {
-          // If audio upload, question must be empty string so Flowise Whisper transcribes it
           question: finalQuestion,
           chatId: senderId || "default_user",
           overrideConfig: {
@@ -134,7 +85,6 @@ class AutoReplyEngine {
               contact_jid: senderId,
               phone: customerPhone,
               customer_name: customerName,
-              customer_email: customerEmail,
               status_tag: statusTag,
             },
           },
@@ -144,7 +94,7 @@ class AutoReplyEngine {
           payload.uploads = uploads;
         }
 
-        const response = await fetch(this.config.microMindApiUrl, {
+        const response = await fetch(settings.microMindApiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -164,9 +114,10 @@ class AutoReplyEngine {
       }
     }
 
-    // 2. Fallback to static rules
+    // 2. Fallback to this account's own keyword rules
+    const rules = await this.getRules();
     const lowerText = cleanText.toLowerCase();
-    for (const rule of this.config.autoReplyRules) {
+    for (const rule of rules) {
       if (!rule.active) continue;
       const ruleKw = (rule.keyword || "").trim().toLowerCase();
       if (!ruleKw) continue;
