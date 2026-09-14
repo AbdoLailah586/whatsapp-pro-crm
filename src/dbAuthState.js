@@ -17,10 +17,34 @@
 // redeploys, container restarts, and moving hosts entirely.
 // ============================================================
 
-const { initAuthCreds, BufferJSON, proto } = require("@whiskeysockets/baileys");
+const { initAuthCreds, BufferJSON, proto, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const fs = require("fs");
+const path = require("path");
 const crmDB = require("./database");
+const { LEGACY_TENANT } = require("./tenant");
 
 async function useDbAuthState(userId) {
+  const isLegacy = !userId || userId === LEGACY_TENANT;
+  const legacyAuthDir = path.join(__dirname, "..", "auth_info");
+
+  // For the legacy tenant, if auth_info with creds.json exists, use useMultiFileAuthState
+  // so the established WhatsApp session (all 66,000+ keys and creds) is directly used!
+  if (isLegacy && fs.existsSync(path.join(legacyAuthDir, "creds.json"))) {
+    const multiFile = await useMultiFileAuthState(legacyAuthDir);
+    return {
+      state: multiFile.state,
+      saveCreds: multiFile.saveCreds,
+      clearAll: async () => {
+        try {
+          await crmDB.clearAuthBlobs(LEGACY_TENANT);
+          const credsFile = path.join(legacyAuthDir, "creds.json");
+          if (fs.existsSync(credsFile)) fs.unlinkSync(credsFile);
+        } catch (e) {
+          console.warn("[Auth] clearAll warning:", e.message);
+        }
+      },
+    };
+  }
   const readData = async (key) => {
     try {
       const raw = await crmDB.getAuthBlob(userId, key);

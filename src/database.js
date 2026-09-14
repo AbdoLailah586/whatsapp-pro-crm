@@ -1544,19 +1544,29 @@ class CRMDatabase {
     return { id, email: email.toLowerCase().trim(), displayName: displayName || "", createdAt: now };
   }
 
-  async getUserByEmail(email) {
-    if (!email) return null;
+  async getUserByEmail(identifier) {
+    if (!identifier) return null;
+    const clean = String(identifier).toLowerCase().trim();
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
         await client.query("SET search_path TO public");
-        const res = await client.query("SELECT * FROM platform_users WHERE email = $1", [email.toLowerCase().trim()]);
+        const res = await client.query(
+          "SELECT * FROM platform_users WHERE LOWER(email) = $1 OR id = $1 OR LOWER(email) LIKE $2 OR LOWER(display_name) = $1",
+          [clean, `${clean}@%`]
+        );
         return res.rows[0] || null;
       } finally {
         client.release();
       }
     }
-    return this._legacySqliteDb.prepare("SELECT * FROM platform_users WHERE email = ?").get(email.toLowerCase().trim()) || null;
+    return (
+      this._legacySqliteDb
+        .prepare(
+          "SELECT * FROM platform_users WHERE LOWER(email) = ? OR id = ? OR LOWER(email) LIKE ? OR LOWER(display_name) = ?"
+        )
+        .get(clean, clean, `${clean}@%`, clean) || null
+    );
   }
 
   async getUserById(id) {
