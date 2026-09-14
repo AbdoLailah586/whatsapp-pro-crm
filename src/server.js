@@ -228,6 +228,18 @@ app.get("/api/status", (req, res) => {
   res.json(client.getState());
 });
 
+app.post("/api/connect", async (req, res) => {
+  try {
+    const client = whatsapp.getClient(req.userId);
+    if (client.status === "disconnected" || client.status === "close") {
+      client.start();
+    }
+    res.json({ success: true, status: client.status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/messages", (req, res) => {
   const client = whatsapp.getClient(req.userId);
   res.json(client.getMessages());

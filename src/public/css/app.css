@@ -133,6 +133,8 @@ a:hover { text-decoration: underline; }
   background: var(--ok); animation: ping 2s var(--e-out) infinite;
 }
 .conn[data-state="connecting"] .conn-dot { background: var(--warn); animation: blink 1.1s ease-in-out infinite; }
+.conn[data-state="close"] { cursor: pointer; transition: background var(--t-1) var(--e-out), border-color var(--t-1) var(--e-out); }
+.conn[data-state="close"]:hover { border-color: var(--danger); background: rgba(239, 68, 68, 0.12); }
 .conn[data-state="close"] .conn-dot { background: var(--danger); }
 .conn-phone { font-family: var(--font-mono); }
 @media (max-width: 900px) { .conn-phone { display: none; } }

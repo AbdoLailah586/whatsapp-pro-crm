@@ -336,6 +336,7 @@
 
     if (st === "connected" || st === "open") {
       conn.setAttribute("data-state", "open");
+      conn.removeAttribute("title");
       label.textContent = "متصل";
       if (S.user && S.user.id) {
         phone.textContent = fmtPhone("", String(S.user.id).split(":")[0] + "@s.whatsapp.net");
@@ -347,6 +348,7 @@
 
     if (st === "qr_ready") {
       conn.setAttribute("data-state", "connecting");
+      conn.removeAttribute("title");
       label.textContent = "امسح الكود";
       phone.textContent = "";
       $("logoutBtn").classList.add("hidden");
@@ -361,7 +363,8 @@
 
     if (st === "disconnected" || st === "close") {
       conn.setAttribute("data-state", "close");
-      label.textContent = "غير متصل";
+      conn.setAttribute("title", "غير متصل - انقر لإعادة الاتصال");
+      label.innerHTML = 'غير متصل <i class="fa-solid fa-rotate-right" style="font-size:10px;margin-inline-start:3px;opacity:0.8;"></i>';
       phone.textContent = "";
       S.user = null;
       $("logoutBtn").classList.add("hidden");
@@ -370,6 +373,7 @@
 
     /* connecting */
     conn.setAttribute("data-state", "connecting");
+    conn.removeAttribute("title");
     label.textContent = "جاري الاتصال";
     $("logoutBtn").classList.add("hidden");
   }
@@ -2455,6 +2459,19 @@
   $("paletteInput").addEventListener("input", function (e) { renderPalette(e.target.value); });
   $("themeBtn").addEventListener("click", toggleTheme);
   $("logoutBtn").addEventListener("click", doLogout);
+
+  $("conn").addEventListener("click", function () {
+    if (S.connState === "disconnected" || S.connState === "close") {
+      setConnState({ status: "connecting" });
+      api("/api/connect", { method: "POST" })
+        .then(function (res) {
+          if (res && res.status) setConnState(res);
+        })
+        .catch(function (err) {
+          toast("تعذر إعادة الاتصال: " + (err.message || err), "warn");
+        });
+    }
+  });
 
   $("botToggle").addEventListener("change", function (e) {
     var on = e.target.checked;

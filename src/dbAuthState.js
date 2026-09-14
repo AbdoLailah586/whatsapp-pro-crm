@@ -74,6 +74,12 @@ async function useDbAuthState(userId) {
           await Promise.all(
             ids.map(async (id) => {
               let value = await readData(`${type}-${id}`);
+              if (!value) {
+                const altKey = `${type}-${id.replace(/\//g, '__').replace(/:/g, '-')}`;
+                if (altKey !== `${type}-${id}`) {
+                  value = await readData(altKey);
+                }
+              }
               if (type === "app-state-sync-key" && value) {
                 value = proto.Message.AppStateSyncKeyData.fromObject(value);
               }

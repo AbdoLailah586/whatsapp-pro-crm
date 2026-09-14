@@ -61,8 +61,17 @@ class WhatsAppClient {
   }
 
   async start() {
-    if (this._starting) return;
+    if (this._starting || this.status === "connected") return;
     this._starting = true;
+    if (this._replaceTimer) clearTimeout(this._replaceTimer);
+
+    if (this.socket) {
+      try {
+        this.socket.ev.removeAllListeners("creds.update");
+        this.socket.ev.removeAllListeners("connection.update");
+        this.socket.ev.removeAllListeners("messages.upsert");
+      } catch (e) {}
+    }
 
     this.status = "connecting";
     this.startedAt = Date.now();
@@ -126,7 +135,14 @@ class WhatsAppClient {
       if (isReplaced) {
         console.warn(`[WhatsApp:${this.userId}] ⚠️ Connection replaced (code: 440). Another active instance (e.g. on Railway or local) connected with this WhatsApp session.`);
         this.emit("status_change", { status: "disconnected", reason: "connection_replaced" });
-        // Do not auto-reconnect in a tight loop to prevent fighting the active server
+        // Attempt a calm reconnection after 25s in case the other instance (e.g. local) was stopped
+        clearTimeout(this._replaceTimer);
+        this._replaceTimer = setTimeout(() => {
+          if (this.status === "disconnected") {
+            console.log(`[WhatsApp:${this.userId}] Attempting gentle reconnect after connection replacement cooldown...`);
+            this.start();
+          }
+        }, 25000);
         return;
       }
 
