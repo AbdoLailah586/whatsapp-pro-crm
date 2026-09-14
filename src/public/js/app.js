@@ -45,6 +45,10 @@
     groupsLoaded: false,
     exportSelectedGroups: new Set(),
     exportLastResult: null,
+    uploadedJsonRaw: null,
+    uploadedJsonFile: null,
+    uploadedJsonNormalized: [],
+    uploadedJsonFiltered: [],
     account: null
   };
 
@@ -60,6 +64,13 @@
   var stackEl = $("stack");
 
   /* ---------------------------- Helpers ---------------------------- */
+
+  function fmtFileSize(bytes) {
+    if (!bytes) return "0 B";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  }
 
   function esc(t) {
     if (t === null || t === undefined) return "";
@@ -1273,6 +1284,7 @@
                   '<option value="vip">تصنيف: VIP</option>' +
                   '<option value="groups">مجموعات واتساب</option>' +
                   '<option value="custom">أرقام يدوية</option>' +
+                  '<option value="json-file">📁 رفع ملف JSON (مستخرج من المجموعات)</option>' +
                   '<optgroup label="قوائم محفوظة" id="cPresets"></optgroup>' +
                 "</select></div>" +
                 '<div class="field hidden" id="cGroupsBox">' +
@@ -1294,6 +1306,58 @@
                 "</div>" +
                 '<div class="field hidden" id="cCustomBox"><label>الأرقام (كل رقم في سطر)</label>' +
                   '<textarea id="cNumbers" rows="4" dir="ltr" placeholder="201012345678"></textarea></div>' +
+                '<div class="field hidden" id="cJsonBox">' +
+                  '<label>ملف JSON لجهات الاتصال المستخرجة</label>' +
+                  '<div class="json-dropzone" id="cJsonDropzone">' +
+                    '<input type="file" id="cJsonFileInput" accept=".json,application/json" style="display:none">' +
+                    '<div class="json-dropzone-inner" id="cJsonDropzonePrompt">' +
+                      '<i class="fa-solid fa-file-arrow-up" style="font-size:24px;color:var(--accent);margin-bottom:6px"></i>' +
+                      '<div style="font-weight:600;font-size:13px">اضغط لاختيار ملف JSON أو اسحبه هنا</div>' +
+                      '<div class="faint" style="font-size:11px;margin-top:2px">يدعم ملفات استخراج المجموعات مثل export_groups_...json</div>' +
+                    '</div>' +
+                    '<div class="json-dropzone-loaded hidden" id="cJsonLoadedView">' +
+                      '<div style="display:flex;align-items:center;gap:10px;justify-content:space-between">' +
+                        '<div style="display:flex;align-items:center;gap:8px;min-width:0">' +
+                          '<i class="fa-solid fa-file-lines" style="color:var(--accent);font-size:20px;flex:none"></i>' +
+                          '<div style="min-width:0;text-align:start">' +
+                            '<span id="cJsonFileName" style="font-weight:600;font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>' +
+                            '<span id="cJsonFileSize" class="faint" style="font-size:11px"></span>' +
+                          '</div>' +
+                        '</div>' +
+                        '<button type="button" class="btn btn-sm" id="cJsonChangeBtn" style="flex:none"><i class="fa-solid fa-arrow-rotate-left"></i> تغيير</button>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                  '<div id="cJsonStats" class="hidden" style="margin-top:10px">' +
+                    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;margin-bottom:10px">' +
+                      '<div class="json-stat-card"><span class="json-stat-num" id="cJsonTotalCount">0</span><span class="json-stat-lbl">إجمالي العناصر</span></div>' +
+                      '<div class="json-stat-card" style="border-color:rgba(16,185,129,0.4);background:rgba(16,185,129,0.06)"><span class="json-stat-num" style="color:var(--green,#10b981)" id="cJsonConfirmedCount">0</span><span class="json-stat-lbl">أرقام مؤكدة</span></div>' +
+                      '<div class="json-stat-card" style="border-color:rgba(245,158,11,0.4);background:rgba(245,158,11,0.06)"><span class="json-stat-num" style="color:var(--warn,#f59e0b)" id="cJsonLidCount">0</span><span class="json-stat-lbl">معرفات LID</span></div>' +
+                      '<div class="json-stat-card"><span class="json-stat-num" id="cJsonAdminCount">0</span><span class="json-stat-lbl">مشرفون</span></div>' +
+                    '</div>' +
+                    '<div style="background:var(--surface-2);padding:10px 12px;border-radius:var(--r-2);border:1px solid var(--line-2)">' +
+                      '<div style="font-weight:600;font-size:12px;margin-bottom:6px">خيارات تصفية الإرسال:</div>' +
+                      '<label class="check-row" style="border:0;padding:3px 0"><input type="checkbox" id="cJsonOnlyConfirmed" checked><span class="n">إرسال للأرقام المؤكدة فقط (تخطي معرفات LID)</span></label>' +
+                      '<label class="check-row" style="border:0;padding:3px 0"><input type="checkbox" id="cJsonDedupe" checked><span class="n">إزالة التكرار (رقم واحد لكل جهة)</span></label>' +
+                      '<label class="check-row" style="border:0;padding:3px 0"><input type="checkbox" id="cJsonExcludeAdmins"><span class="n">استبعاد مشرفي المجموعات</span></label>' +
+                      '<label class="check-row" style="border:0;padding:3px 0"><input type="checkbox" id="cJsonAdminsOnly"><span class="n">إرسال للمشرفين فقط</span></label>' +
+                      '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">' +
+                        '<label style="font-size:12px;white-space:nowrap;margin:0">حد أقصى للإرسال:</label>' +
+                        '<input type="number" id="cJsonLimit" placeholder="الكل (أو حدد مثل 100)" min="1" style="max-width:180px;height:30px;font-size:12px">' +
+                        '<span class="faint" style="font-size:11px">فارغ = الكل</span>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div style="margin-top:8px;padding:8px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:var(--r-2);display:flex;align-items:center;justify-content:space-between">' +
+                      '<span style="font-size:12px;font-weight:600">الجمهور المستهدف بعد الفلترة:</span>' +
+                      '<span class="tag" data-tone="ok" id="cJsonFinalCount" style="font-size:12px;font-weight:700">0 جهة</span>' +
+                    '</div>' +
+                    '<div style="margin-top:8px">' +
+                      '<span class="faint" style="font-size:11px">معاينة أولية (أول 3 أرقام):</span>' +
+                      '<div id="cJsonPreviewList" style="margin-top:4px;font-size:11px;max-height:80px;overflow-y:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-1);padding:6px">' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                '</div>' +
                 '<div class="field"><label>نص الرسالة — استخدم <span class="mono">{name}</span> لاسم العميل</label>' +
                   '<textarea id="cTemplate" rows="4" placeholder="أهلاً {name}، خصم 20% خاص ليك النهاردة!"></textarea></div>' +
                 '<div class="field"><label>صورة (اختياري)</label>' +
@@ -1322,6 +1386,70 @@
         if (gs) gs.addEventListener("input", function (e) { renderGroups(e.target.value); });
         var sel = el.querySelector("#cAudience");
         if (sel) sel.addEventListener("change", function (e) { onAudienceChange(e.target.value); });
+
+        var jsonDrop = el.querySelector("#cJsonDropzone");
+        var jsonInput = el.querySelector("#cJsonFileInput");
+        var jsonChangeBtn = el.querySelector("#cJsonChangeBtn");
+        if (jsonDrop && jsonInput) {
+          jsonDrop.addEventListener("click", function (e) {
+            if (e.target.closest("#cJsonChangeBtn") || e.target.id === "cJsonChangeBtn" || !$("cJsonLoadedView") || $("cJsonLoadedView").classList.contains("hidden")) {
+              jsonInput.click();
+            }
+          });
+          if (jsonChangeBtn) {
+            jsonChangeBtn.addEventListener("click", function (e) {
+              e.stopPropagation();
+              jsonInput.click();
+            });
+          }
+          jsonInput.addEventListener("change", function (e) {
+            if (e.target.files && e.target.files[0]) {
+              parseAndLoadJsonFile(e.target.files[0]);
+            }
+          });
+          jsonDrop.addEventListener("dragover", function (e) {
+            e.preventDefault();
+            jsonDrop.classList.add("dragover");
+          });
+          jsonDrop.addEventListener("dragleave", function () {
+            jsonDrop.classList.remove("dragover");
+          });
+          jsonDrop.addEventListener("drop", function (e) {
+            e.preventDefault();
+            jsonDrop.classList.remove("dragover");
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+              parseAndLoadJsonFile(e.dataTransfer.files[0]);
+            }
+          });
+        }
+
+        var jsonChkIds = ["cJsonOnlyConfirmed", "cJsonDedupe", "cJsonExcludeAdmins", "cJsonAdminsOnly"];
+        jsonChkIds.forEach(function (cid) {
+          var chk = el.querySelector("#" + cid);
+          if (chk) {
+            chk.addEventListener("change", function () {
+              if (cid === "cJsonAdminsOnly" && chk.checked) {
+                var exc = el.querySelector("#cJsonExcludeAdmins");
+                if (exc) exc.checked = false;
+              } else if (cid === "cJsonExcludeAdmins" && chk.checked) {
+                var adm = el.querySelector("#cJsonAdminsOnly");
+                if (adm) adm.checked = false;
+              }
+              applyJsonFilters();
+            });
+          }
+        });
+
+        var jsonLimit = el.querySelector("#cJsonLimit");
+        if (jsonLimit) {
+          jsonLimit.addEventListener("input", function () { applyJsonFilters(); });
+        }
+
+        if (S.uploadedJsonFile && S.uploadedJsonNormalized && S.uploadedJsonNormalized.length) {
+          renderJsonLoadedState();
+          applyJsonFilters();
+        }
+
         if (S.activeCampaignId) showCampaignProgress();
       }
     };
@@ -1341,11 +1469,12 @@
   }
 
   function onAudienceChange(val) {
-    var groupsBox = $("cGroupsBox"), customBox = $("cCustomBox");
+    var groupsBox = $("cGroupsBox"), customBox = $("cCustomBox"), jsonBox = $("cJsonBox");
     var isGroups = val === "groups" || val.indexOf("preset:") === 0;
-    groupsBox.classList.toggle("hidden", !isGroups);
-    customBox.classList.toggle("hidden", val !== "custom");
-    $("cPresetDel").classList.toggle("hidden", val.indexOf("preset:") !== 0);
+    if (groupsBox) groupsBox.classList.toggle("hidden", !isGroups);
+    if (customBox) customBox.classList.toggle("hidden", val !== "custom");
+    if (jsonBox) jsonBox.classList.toggle("hidden", val !== "json-file");
+    if ($("cPresetDel")) $("cPresetDel").classList.toggle("hidden", val.indexOf("preset:") !== 0);
 
     if (isGroups) {
       fetchGroups().then(function () {
@@ -1360,6 +1489,165 @@
         renderGroups($("cGroupSearch") ? $("cGroupSearch").value : "");
       });
     }
+  }
+
+  function normalizeJsonEntry(item) {
+    if (!item) return null;
+    var phone = "", jid = "", name = "", isAdmin = false, groupName = "";
+    if (typeof item === "string" || typeof item === "number") {
+      phone = String(item).trim();
+    } else if (typeof item === "object") {
+      phone = String(item.phone || item.number || item.mobile || item.phoneNumber || "").trim();
+      jid = String(item.jid || item.id || "").trim();
+      name = String(item.name || item.fullName || item.pushName || "").trim();
+      isAdmin = !!(item.isAdmin || item.is_admin || item.admin);
+      groupName = String(item.groupName || item.group || (item.groups && item.groups[0]) || "").trim();
+    }
+
+    var digits = phone.replace(/\D/g, "");
+    if (!digits && jid && (jid.includes("@s.whatsapp.net") || jid.includes("@c.us"))) {
+      digits = jid.split("@")[0].replace(/\D/g, "");
+    }
+    if (digits.startsWith("01") && digits.length === 11) {
+      digits = "2" + digits;
+    }
+
+    var isLid = digits.length >= 14 || (jid.includes("@lid") && (digits.length >= 14 || !digits));
+    var isConfirmedPhone = digits.length >= 10 && digits.length <= 13;
+
+    return {
+      raw: item,
+      phone: digits || phone,
+      jid: jid,
+      name: name,
+      isAdmin: isAdmin,
+      groupName: groupName,
+      isLid: isLid,
+      isConfirmedPhone: isConfirmedPhone
+    };
+  }
+
+  function applyJsonFilters() {
+    if (!S.uploadedJsonNormalized || !S.uploadedJsonNormalized.length) {
+      S.uploadedJsonFiltered = [];
+      updateJsonFilterDisplay();
+      return;
+    }
+
+    var onlyConfirmed = $("cJsonOnlyConfirmed") ? $("cJsonOnlyConfirmed").checked : true;
+    var dedupe = $("cJsonDedupe") ? $("cJsonDedupe").checked : true;
+    var excludeAdmins = $("cJsonExcludeAdmins") ? $("cJsonExcludeAdmins").checked : false;
+    var adminsOnly = $("cJsonAdminsOnly") ? $("cJsonAdminsOnly").checked : false;
+    var limitInput = $("cJsonLimit");
+    var limitVal = limitInput && limitInput.value ? parseInt(limitInput.value, 10) : 0;
+
+    var list = S.uploadedJsonNormalized.slice();
+
+    if (onlyConfirmed) {
+      list = list.filter(function (x) { return x.isConfirmedPhone; });
+    }
+    if (excludeAdmins) {
+      list = list.filter(function (x) { return !x.isAdmin; });
+    }
+    if (adminsOnly) {
+      list = list.filter(function (x) { return x.isAdmin; });
+    }
+
+    if (dedupe) {
+      var seen = new Set();
+      list = list.filter(function (x) {
+        var key = x.phone || x.jid;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    if (limitVal > 0) {
+      list = list.slice(0, limitVal);
+    }
+
+    S.uploadedJsonFiltered = list;
+    updateJsonFilterDisplay();
+  }
+
+  function updateJsonFilterDisplay() {
+    var countEl = $("cJsonFinalCount");
+    var cnt = S.uploadedJsonFiltered ? S.uploadedJsonFiltered.length : 0;
+    if (countEl) countEl.textContent = cnt.toLocaleString() + " جهة";
+
+    var prev = $("cJsonPreviewList");
+    if (prev) {
+      if (!cnt) {
+        prev.innerHTML = '<span class="faint">لا توجد أرقام مطابقة للفلاتر الحالية.</span>';
+      } else {
+        var sample = S.uploadedJsonFiltered.slice(0, 3);
+        prev.innerHTML = sample.map(function (item, idx) {
+          var label = (item.name ? item.name + " · " : "") + (item.phone || item.jid) + (item.isAdmin ? " (مشرف)" : "");
+          var grp = item.groupName ? ' <span class="faint">[' + esc(item.groupName) + ']</span>' : "";
+          return '<div style="padding:2px 0">' + (idx + 1) + '. <span class="mono" dir="ltr">' + esc(label) + "</span>" + grp + "</div>";
+        }).join("") + (cnt > 3 ? '<div class="faint" style="margin-top:2px">... والمزيد (' + (cnt - 3).toLocaleString() + ' جهة أخرى)</div>' : "");
+      }
+    }
+  }
+
+  function parseAndLoadJsonFile(file) {
+    if (!file) return;
+    var fname = file.name || "";
+    if (!fname.toLowerCase().endsWith(".json") && file.type !== "application/json") {
+      return toast("يرجى اختيار ملف بصيغة JSON.", "warn");
+    }
+
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      try {
+        var parsed = JSON.parse(e.target.result);
+        var rawList = Array.isArray(parsed) ? parsed : (parsed.data || parsed.contacts || parsed.items || []);
+        if (!Array.isArray(rawList) || !rawList.length) {
+          return toast("ملف الـ JSON لا يحتوي على مصفوفة جهات اتصال صالحة.", "warn");
+        }
+
+        S.uploadedJsonRaw = rawList;
+        S.uploadedJsonFile = file;
+        S.uploadedJsonNormalized = rawList.map(normalizeJsonEntry).filter(Boolean);
+
+        renderJsonLoadedState();
+        applyJsonFilters();
+        toast("تم قراءة ملف JSON بنجاح: " + S.uploadedJsonNormalized.length.toLocaleString() + " جهة.", "ok");
+      } catch (err) {
+        toast("فشل قراءة ملف الـ JSON: " + err.message, "danger");
+      }
+    };
+    reader.onerror = function () {
+      toast("حدث خطأ أثناء قراءة الملف من الجهاز.", "danger");
+    };
+    reader.readAsText(file);
+  }
+
+  function renderJsonLoadedState() {
+    if (!S.uploadedJsonFile || !S.uploadedJsonNormalized) return;
+    var promptEl = $("cJsonDropzonePrompt");
+    var loadedEl = $("cJsonLoadedView");
+    var statsEl = $("cJsonStats");
+    if (promptEl) promptEl.classList.add("hidden");
+    if (loadedEl) loadedEl.classList.remove("hidden");
+    if (statsEl) statsEl.classList.remove("hidden");
+
+    var nameEl = $("cJsonFileName");
+    var sizeEl = $("cJsonFileSize");
+    if (nameEl) nameEl.textContent = S.uploadedJsonFile.name;
+    if (sizeEl) sizeEl.textContent = fmtFileSize(S.uploadedJsonFile.size) + " · (" + S.uploadedJsonNormalized.length.toLocaleString() + " عنصر)";
+
+    var total = S.uploadedJsonNormalized.length;
+    var confirmed = S.uploadedJsonNormalized.filter(function (x) { return x.isConfirmedPhone; }).length;
+    var lids = S.uploadedJsonNormalized.filter(function (x) { return x.isLid; }).length;
+    var admins = S.uploadedJsonNormalized.filter(function (x) { return x.isAdmin; }).length;
+
+    var tc = $("cJsonTotalCount"), cc = $("cJsonConfirmedCount"), lc = $("cJsonLidCount"), ac = $("cJsonAdminCount");
+    if (tc) tc.textContent = total.toLocaleString();
+    if (cc) cc.textContent = confirmed.toLocaleString();
+    if (lc) lc.textContent = lids.toLocaleString();
+    if (ac) ac.textContent = admins.toLocaleString();
   }
 
   function fetchGroups(force) {
@@ -1436,6 +1724,21 @@
     } else if (audience === "custom") {
       contacts = $("cNumbers").value.split(/[\n,]+/).map(function (n) { return n.trim(); })
         .filter(function (n) { return n.length > 5; });
+    } else if (audience === "json-file") {
+      if (!S.uploadedJsonNormalized || !S.uploadedJsonNormalized.length) {
+        return toast("يرجى اختيار أو سحب ملف JSON أولاً.", "warn");
+      }
+      if (!S.uploadedJsonFiltered || !S.uploadedJsonFiltered.length) {
+        return toast("مفيش أرقام مطابقة للفلاتر الحالية من ملف JSON.", "warn");
+      }
+      contacts = S.uploadedJsonFiltered.map(function (item) {
+        return {
+          phone: item.phone,
+          jid: item.jid || (item.phone ? item.phone + "@s.whatsapp.net" : ""),
+          name: item.name || (item.isAdmin ? "مشرف" : ""),
+          groupName: item.groupName || ""
+        };
+      });
     } else if (audience === "all") {
       contacts = S.contacts.map(function (c) { return { phone: c.phone || c.jid.split("@")[0], name: c.name, jid: c.jid }; });
     } else {
@@ -1453,6 +1756,9 @@
       fd.append("delaySeconds", delay);
       fd.append("contacts", JSON.stringify(contacts));
       if (img) fd.append("image", img);
+      if (audience === "json-file" && S.uploadedJsonFile) {
+        fd.append("jsonFile", S.uploadedJsonFile);
+      }
 
       var btn = document.querySelector('[data-act="start-campaign"]');
       if (btn) btn.disabled = true;

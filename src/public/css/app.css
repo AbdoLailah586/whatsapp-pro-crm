@@ -857,6 +857,45 @@ table.data select { font-size: var(--fs-xs); padding: 4px 8px; width: auto; min-
   }
 }
 
+/* ============================ 15 · JSON CAMPAIGN UPLOAD ============================ */
+.json-dropzone {
+  border: 2px dashed var(--line);
+  border-radius: var(--r-3);
+  padding: var(--s-5) var(--s-4);
+  text-align: center;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--t-2) var(--e-out), background var(--t-2) var(--e-out);
+}
+.json-dropzone:hover, .json-dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.json-dropzone-inner i { transition: transform var(--t-2) var(--e-out); }
+.json-dropzone:hover .json-dropzone-inner i { transform: translateY(-3px); }
+.json-stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 6px;
+  border-radius: var(--r-2);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  text-align: center;
+}
+.json-stat-num {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.json-stat-lbl {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 /* ============================ 16 · RESPONSIVE ============================ */
 @media (max-width: 860px) {
   :root { --panel-list-w: 280px; --panel-detail-w: 300px; }

@@ -318,17 +318,27 @@ class AutomationTools {
           }
         } else if (typeof target === "object" && target) {
           displayName = target.name || target.subject || (target.jid?.includes("@g.us") ? "مجموعة واتساب" : "عزيزي العميل");
-          if (target.jid && (target.jid.includes("@g.us") || target.jid.includes("@s.whatsapp.net"))) {
+          let rawPhone = target.phone || "";
+          let cleanPhone = rawPhone.replace(/\D/g, "");
+          if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
+            cleanPhone = "2" + cleanPhone;
+          }
+
+          if (target.jid && target.jid.includes("@g.us")) {
             jid = target.jid;
-            logIdentifier = target.jid.includes("@g.us") ? (target.name || target.jid) : (target.phone || target.jid.split("@")[0]);
-          } else {
-            let rawPhone = target.phone || target.jid || "";
-            let cleanPhone = rawPhone.replace(/\D/g, "");
-            if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
-              cleanPhone = "2" + cleanPhone;
-            }
+            logIdentifier = target.name || target.jid;
+          } else if (cleanPhone && cleanPhone.length >= 10 && cleanPhone.length <= 13) {
             jid = `${cleanPhone}@s.whatsapp.net`;
             logIdentifier = cleanPhone;
+          } else if (target.jid && (target.jid.includes("@s.whatsapp.net") || target.jid.includes("@lid"))) {
+            jid = target.jid;
+            logIdentifier = cleanPhone || target.jid.split("@")[0];
+          } else if (cleanPhone) {
+            jid = `${cleanPhone}@s.whatsapp.net`;
+            logIdentifier = cleanPhone;
+          } else {
+            jid = target.jid || "";
+            logIdentifier = jid;
           }
         }
 

@@ -825,13 +825,25 @@ app.get("/api/campaigns", async (req, res) => {
   }
 });
 
-app.post("/api/campaigns", upload.single("image"), async (req, res) => {
+app.post("/api/campaigns", upload.fields([{ name: "image", maxCount: 1 }, { name: "jsonFile", maxCount: 1 }]), async (req, res) => {
   try {
     let { title, template, contacts, delaySeconds } = req.body || {};
     let imagePath = null;
 
-    if (req.file) {
+    if (req.files && req.files.image && req.files.image[0]) {
+      imagePath = req.files.image[0].path;
+    } else if (req.file) {
       imagePath = req.file.path;
+    }
+
+    if ((!contacts || contacts === "[]") && req.files && req.files.jsonFile && req.files.jsonFile[0]) {
+      try {
+        const fileContent = fs.readFileSync(req.files.jsonFile[0].path, "utf8");
+        const parsed = JSON.parse(fileContent);
+        contacts = Array.isArray(parsed) ? parsed : (parsed.data || parsed.contacts || parsed.items || []);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid JSON file uploaded." });
+      }
     }
 
     if (typeof contacts === "string") {
