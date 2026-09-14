@@ -13,7 +13,7 @@ echo.
 
 :: 1. Check Git installation
 where git >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
+if !ERRORLEVEL! NEQ 0 (
     color 0C
     echo [ERROR] Git is not installed or not found in system PATH.
     echo Please install Git from: https://git-scm.com/
@@ -24,7 +24,7 @@ if %ERRORLEVEL% NEQ 0 (
 echo [1/3] Scanning for local changes...
 git add .
 git diff --cached --quiet
-if %ERRORLEVEL% NEQ 0 (
+if !ERRORLEVEL! NEQ 0 (
     echo.
     echo [*] Detected modified or new files.
     set "commit_msg="
@@ -36,7 +36,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Committing changes: "!commit_msg!"...
     git commit -m "!commit_msg!"
-    if %ERRORLEVEL% NEQ 0 (
+    if !ERRORLEVEL! NEQ 0 (
         color 0C
         echo.
         echo [ERROR] Commit failed.
@@ -50,7 +50,7 @@ if %ERRORLEVEL% NEQ 0 (
 echo.
 echo [2/3] Checking for updates from GitHub...
 git pull --rebase origin main
-if %ERRORLEVEL% NEQ 0 (
+if !ERRORLEVEL! NEQ 0 (
     echo [!] Warning: Rebase encountered an issue or remote is currently unreachable.
 )
 
@@ -73,7 +73,7 @@ echo.
 echo [3/3] Pushing !UNPUSHED! commit(s) to GitHub (origin main)...
 git push origin main
 
-if %ERRORLEVEL% EQU 0 (
+if !ERRORLEVEL! EQU 0 (
     color 0A
     echo.
     echo ========================================================
