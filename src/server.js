@@ -74,9 +74,17 @@ const authRouter = express.Router();
 
 authRouter.post("/register", async (req, res) => {
   try {
-    const { email, password, displayName } = req.body || {};
+    let { email, password, displayName } = req.body || {};
+    email = String(email || "").trim();
+    if (!email) {
+      return res.status(400).json({ error: "البريد الإلكتروني أو رقم الهاتف مطلوب." });
+    }
+    // Allow phone numbers as account identifier
+    if (/^\+?\d{8,15}$/.test(email)) {
+      email = `${email.replace(/\D/g, "")}@whatsapp.pro`;
+    }
     if (!isValidEmail(email)) {
-      return res.status(400).json({ error: "بريد إلكتروني غير صالح." });
+      return res.status(400).json({ error: "بريد إلكتروني أو رقم هاتف غير صالح." });
     }
     if (!password || String(password).length < 6) {
       return res.status(400).json({ error: "كلمة المرور يجب ألا تقل عن 6 أحرف." });
@@ -84,7 +92,7 @@ authRouter.post("/register", async (req, res) => {
 
     const existing = await crmDB.getUserByEmail(email);
     if (existing) {
-      return res.status(409).json({ error: "هذا البريد الإلكتروني مسجّل بالفعل." });
+      return res.status(409).json({ error: "هذا الحساب مسجّل بالفعل." });
     }
 
     const isFirstUser = (await crmDB.countUsers()) === 0;

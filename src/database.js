@@ -1546,8 +1546,8 @@ class CRMDatabase {
   // ==========================================================
   async countUsers() {
     if (this.isPostgres) {
-      const res = await this.pgPool.query('SET search_path TO public; SELECT COUNT(*) as count FROM platform_users');
-      return Number(res.rows[0].count);
+      const res = await this.pgPool.query("SELECT COUNT(*) as count FROM public.platform_users");
+      return Number(res.rows[0]?.count || 0);
     }
     return this._legacySqliteDb.prepare("SELECT COUNT(*) as count FROM platform_users").get().count;
   }
@@ -1557,9 +1557,8 @@ class CRMDatabase {
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
-        await client.query("SET search_path TO public");
         await client.query(
-          "INSERT INTO platform_users (id, email, password_hash, display_name, created_at) VALUES ($1,$2,$3,$4,$5)",
+          "INSERT INTO public.platform_users (id, email, password_hash, display_name, created_at) VALUES ($1,$2,$3,$4,$5)",
           [id, email.toLowerCase().trim(), passwordHash, displayName || "", now]
         );
       } finally {
@@ -1579,9 +1578,8 @@ class CRMDatabase {
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
-        await client.query("SET search_path TO public");
         const res = await client.query(
-          "SELECT * FROM platform_users WHERE LOWER(email) = $1 OR id = $1 OR LOWER(email) LIKE $2 OR LOWER(display_name) = $1",
+          "SELECT * FROM public.platform_users WHERE LOWER(email) = $1 OR id = $1 OR LOWER(email) LIKE $2 OR LOWER(display_name) = $1",
           [clean, `${clean}@%`]
         );
         return res.rows[0] || null;
@@ -1603,8 +1601,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
-        await client.query("SET search_path TO public");
-        const res = await client.query("SELECT * FROM platform_users WHERE id = $1", [id]);
+        const res = await client.query("SELECT * FROM public.platform_users WHERE id = $1", [id]);
         return res.rows[0] || null;
       } finally {
         client.release();
