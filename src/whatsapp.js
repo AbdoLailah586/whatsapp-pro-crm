@@ -117,17 +117,27 @@ class WhatsAppClient {
         ? lastDisconnect.error.output?.statusCode
         : 0;
 
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+
       this.status = "disconnected";
       this.user = null;
+
+      if (isReplaced) {
+        console.warn(`[WhatsApp:${this.userId}] ⚠️ Connection replaced (code: 440). Another active instance (e.g. on Railway or local) connected with this WhatsApp session.`);
+        this.emit("status_change", { status: "disconnected", reason: "connection_replaced" });
+        // Do not auto-reconnect in a tight loop to prevent fighting the active server
+        return;
+      }
+
+      const shouldReconnect = !isLoggedOut;
       console.log(`[WhatsApp:${this.userId}] Connection closed (code: ${statusCode}). Reconnect: ${shouldReconnect}`);
 
       if (shouldReconnect) {
         this.emit("status_change", { status: "connecting" });
-        setTimeout(() => this.start(), 1500);
+        setTimeout(() => this.start(), 3000);
       } else {
         this.emit("status_change", { status: this.status, reason: statusCode });
-        setTimeout(() => this.start(), 3000);
       }
     } else if (connection === "open") {
       this.status = "connected";
@@ -139,24 +149,26 @@ class WhatsAppClient {
         user: this.user,
       });
 
-      // Preload and cache all WhatsApp groups without artificially overriding last_message_time
-      try {
-        const groups = await this.socket.groupFetchAllParticipating();
-        for (const [gid, meta] of Object.entries(groups)) {
-          this.groupCache.set(gid, meta);
-          await crmDB.upsertContact(
-            gid,
-            meta.subject || "مجموعة واتساب",
-            "",
-            "",
-            meta.creation ? Number(meta.creation) * 1000 : 0,
-            false,
-            1
-          );
+      // Preload and cache all WhatsApp groups only if not already cached to prevent rate-overlimit
+      if (this.groupCache.size === 0) {
+        try {
+          const groups = await this.socket.groupFetchAllParticipating();
+          for (const [gid, meta] of Object.entries(groups)) {
+            this.groupCache.set(gid, meta);
+            await crmDB.upsertContact(
+              gid,
+              meta.subject || "مجموعة واتساب",
+              "",
+              "",
+              meta.creation ? Number(meta.creation) * 1000 : 0,
+              false,
+              1
+            );
+          }
+          console.log(`[WhatsApp:${this.userId}] Cached ${Object.keys(groups).length} WhatsApp groups.`);
+        } catch (gErr) {
+          console.warn(`[WhatsApp:${this.userId}] Group preloading notice:`, gErr.message);
         }
-        console.log(`[WhatsApp:${this.userId}] Cached ${Object.keys(groups).length} WhatsApp groups.`);
-      } catch (gErr) {
-        console.warn(`[WhatsApp:${this.userId}] Group preloading notice:`, gErr.message);
       }
     }
   }
