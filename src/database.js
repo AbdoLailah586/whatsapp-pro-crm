@@ -145,6 +145,9 @@ class CRMDatabase {
         jid TEXT PRIMARY KEY,
         name TEXT,
         phone TEXT,
+        is_group INTEGER DEFAULT 0,
+        avatar_url TEXT,
+        status_bio TEXT,
         status_tag TEXT DEFAULT 'new',
         lead_score INTEGER DEFAULT 0,
         total_spent REAL DEFAULT 0.0,
@@ -165,10 +168,12 @@ class CRMDatabase {
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         contact_jid TEXT NOT NULL,
+        participant_jid TEXT,
         sender_name TEXT,
         text TEXT,
         media_type TEXT,
         media_url TEXT,
+        media_meta TEXT DEFAULT '{}',
         from_me INTEGER DEFAULT 0,
         auto_replied INTEGER DEFAULT 0,
         timestamp INTEGER
@@ -303,24 +308,48 @@ class CRMDatabase {
       CREATE INDEX IF NOT EXISTS idx_ai_memory_jid ON ai_memory_context(contact_jid);
     `);
 
-    // Safe migration if table existed previously without media_url
-    try {
-      db.exec("ALTER TABLE contacts ADD COLUMN avatar_url TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN status_bio TEXT;");
-    } catch (e) {}
+    // Safe column migrations - check each column individually so duplicate errors never abort migration
+    this._safeAddColumn(db, "contacts", "is_group", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "contacts", "avatar_url", "TEXT");
+    this._safeAddColumn(db, "contacts", "status_bio", "TEXT");
+    this._safeAddColumn(db, "contacts", "lead_score", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "contacts", "total_spent", "REAL DEFAULT 0.0");
+    this._safeAddColumn(db, "contacts", "total_orders_count", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "contacts", "bot_paused", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "contacts", "assigned_agent", "TEXT");
+    this._safeAddColumn(db, "contacts", "city", "TEXT");
+    this._safeAddColumn(db, "contacts", "governorate", "TEXT");
+    this._safeAddColumn(db, "contacts", "address", "TEXT");
+    this._safeAddColumn(db, "contacts", "custom_notes", "TEXT DEFAULT ''");
+    this._safeAddColumn(db, "contacts", "custom_fields", "TEXT DEFAULT '{}'");
+    this._safeAddColumn(db, "contacts", "last_message", "TEXT DEFAULT ''");
+    this._safeAddColumn(db, "contacts", "last_message_time", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "contacts", "unread_count", "INTEGER DEFAULT 0");
 
+    this._safeAddColumn(db, "messages", "participant_jid", "TEXT");
+    this._safeAddColumn(db, "messages", "media_url", "TEXT");
+    this._safeAddColumn(db, "messages", "media_meta", "TEXT DEFAULT '{}'");
+    this._safeAddColumn(db, "messages", "ai_model", "TEXT");
+    this._safeAddColumn(db, "messages", "ai_tokens_used", "INTEGER DEFAULT 0");
+    this._safeAddColumn(db, "messages", "sentiment", "TEXT");
+    this._safeAddColumn(db, "messages", "intent", "TEXT");
+
+    this._safeAddColumn(db, "orders_leads", "order_number", "TEXT");
+    this._safeAddColumn(db, "orders_leads", "items", "TEXT DEFAULT '[]'");
+    this._safeAddColumn(db, "orders_leads", "currency", "TEXT DEFAULT 'EGP'");
+    this._safeAddColumn(db, "orders_leads", "payment_method", "TEXT DEFAULT 'cash_on_delivery'");
+    this._safeAddColumn(db, "orders_leads", "payment_status", "TEXT DEFAULT 'unpaid'");
+    this._safeAddColumn(db, "orders_leads", "city", "TEXT");
+    this._safeAddColumn(db, "orders_leads", "governorate", "TEXT");
+    this._safeAddColumn(db, "orders_leads", "source", "TEXT DEFAULT 'whatsapp_ai'");
+  }
+
+  _safeAddColumn(db, table, column, definition) {
     try {
-      db.exec("ALTER TABLE contacts ADD COLUMN lead_score INTEGER DEFAULT 0;");
-      db.exec("ALTER TABLE contacts ADD COLUMN total_spent REAL DEFAULT 0.0;");
-      db.exec("ALTER TABLE contacts ADD COLUMN total_orders_count INTEGER DEFAULT 0;");
-      db.exec("ALTER TABLE contacts ADD COLUMN city TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN governorate TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN address TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN custom_fields TEXT DEFAULT '{}';");
-      db.exec("ALTER TABLE contacts ADD COLUMN avatar_url TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN status_bio TEXT;");
-      db.exec("ALTER TABLE contacts ADD COLUMN is_group INTEGER DEFAULT 0;");
-      db.exec("ALTER TABLE messages ADD COLUMN participant_jid TEXT;");
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+      if (!cols.some((c) => c.name.toLowerCase() === column.toLowerCase())) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+      }
     } catch (e) {}
   }
 
