@@ -3,6 +3,7 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   downloadMediaMessage,
+  Browsers,
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const QRCode = require("qrcode");
@@ -86,7 +87,7 @@ class WhatsAppClient {
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
         auth: state,
-        browser: ["WhatsApp Pro Dashboard", "Chrome", "1.0.0"],
+        browser: Browsers.windows("Desktop"),
         syncFullHistory: false,
       });
 
@@ -409,6 +410,42 @@ class WhatsAppClient {
     this.emit("new_message", sentData);
 
     return sentData;
+  }
+
+  async simulateHumanTyping(jid, durationMs = 3000) {
+    if (!this.socket || this.status !== "connected") return;
+    try {
+      let targetJid = jid;
+      if (!targetJid.includes("@")) {
+        let clean = targetJid.replace(/\D/g, "");
+        if (clean.startsWith("01") && clean.length === 11) clean = "2" + clean;
+        targetJid = `${clean}@s.whatsapp.net`;
+      }
+      await this.socket.sendPresenceUpdate("composing", targetJid);
+      await new Promise((resolve) => setTimeout(resolve, durationMs));
+      await this.socket.sendPresenceUpdate("paused", targetJid);
+    } catch (e) {
+      // Non-fatal presence update error
+    }
+  }
+
+  async isOnWhatsApp(phoneOrJid) {
+    if (!this.socket || this.status !== "connected") return { exists: true, jid: phoneOrJid };
+    try {
+      let clean = String(phoneOrJid).replace(/\D/g, "");
+      if (clean.startsWith("01") && clean.length === 11) {
+        clean = "2" + clean;
+      }
+      if (!clean) return { exists: false, jid: phoneOrJid };
+      const results = await this.socket.onWhatsApp(clean);
+      if (Array.isArray(results) && results.length > 0) {
+        return { exists: !!results[0].exists, jid: results[0].jid || `${clean}@s.whatsapp.net` };
+      }
+      return { exists: false, jid: phoneOrJid };
+    } catch (e) {
+      // If Baileys check fails, fallback to allowing it
+      return { exists: true, jid: phoneOrJid };
+    }
   }
 
   async logout() {

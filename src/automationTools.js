@@ -263,8 +263,37 @@ class AutomationTools {
     }
   }
 
-  // 3. Campaign Sender with Anti-Ban Random Delay
-  static async runCampaign(whatsappInstance, { title, template, contacts, imagePath, delaySeconds = 8, ioEmitter = null }) {
+  // Spintax parser: resolves {option1|option2|option3} variations
+  static parseSpintax(text) {
+    if (!text || typeof text !== "string") return text;
+    const spintaxRegex = /\{([^{}]+)\}/g;
+    let iterations = 0;
+    while (spintaxRegex.test(text) && iterations < 10) {
+      text = text.replace(spintaxRegex, (_, choices) => {
+        const options = choices.split("|");
+        return options[Math.floor(Math.random() * options.length)];
+      });
+      iterations++;
+    }
+    return text;
+  }
+
+  // 3. Campaign Sender with Anti-Ban Micro-Batching & Human Simulation
+  static async runCampaign(whatsappInstance, {
+    title,
+    template,
+    contacts,
+    imagePath,
+    delaySeconds = 8,
+    minDelay = null,
+    maxDelay = null,
+    batchSize = 25,
+    batchCooldownMinutes = 45,
+    enableTyping = true,
+    enableSpintax = true,
+    verifyWhatsApp = true,
+    ioEmitter = null
+  }) {
     if (!whatsappInstance || !whatsappInstance.socket) {
       throw new Error("WhatsApp is not connected.");
     }
@@ -272,6 +301,7 @@ class AutomationTools {
     const campaignId = await crmDB.createCampaign(title, template, contacts.length, delaySeconds);
     let sentCount = 0;
     let failedCount = 0;
+    let sentInCurrentBatch = 0;
 
     // Run async in background
     (async () => {
@@ -297,10 +327,66 @@ class AutomationTools {
           break;
         }
 
+        // Anti-Ban Micro-Batch Cooling Pause
+        if (batchSize > 0 && sentInCurrentBatch >= batchSize && i < contacts.length) {
+          const cooldownMs = Math.max(1, Number(batchCooldownMinutes) || 45) * 60 * 1000;
+          const coolingUntil = Date.now() + cooldownMs;
+          AutomationTools.campaignState[campaignId] = 'cooling';
+          await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cooling");
+
+          console.log(`🛡️ [Anti-Ban Guard] Campaign #${campaignId} reached batch limit (${sentInCurrentBatch} sent). Cooling for ${batchCooldownMinutes} min...`);
+
+          while (Date.now() < coolingUntil) {
+            if (AutomationTools.campaignState[campaignId] === 'cancelled') break;
+            if (AutomationTools.campaignState[campaignId] === 'running' || AutomationTools.campaignState[campaignId] === 'skip_cooldown') {
+              console.log(`⚡ [Anti-Ban Guard] Cooldown skipped by user for campaign #${campaignId}`);
+              break;
+            }
+            while (AutomationTools.campaignState[campaignId] === 'paused') {
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+
+            const remainingSeconds = Math.max(0, Math.ceil((coolingUntil - Date.now()) / 1000));
+            if (ioEmitter) {
+              ioEmitter("campaign_progress", {
+                campaignId,
+                sentCount,
+                failedCount,
+                total: contacts.length,
+                status: "cooling",
+                coolingUntil,
+                remainingSeconds,
+                percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
+              });
+            }
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+
+          if (AutomationTools.campaignState[campaignId] === 'cancelled') {
+            await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cancelled");
+            if (ioEmitter) {
+              ioEmitter("campaign_progress", {
+                campaignId,
+                sentCount,
+                failedCount,
+                total: contacts.length,
+                status: "cancelled",
+                percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
+              });
+            }
+            break;
+          }
+
+          AutomationTools.campaignState[campaignId] = 'running';
+          sentInCurrentBatch = 0;
+          await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "running");
+        }
+
         const target = contacts[i];
         let jid = "";
         let displayName = "";
         let logIdentifier = "";
+        let cleanPhone = "";
 
         if (typeof target === "string") {
           if (target.includes("@g.us") || target.includes("@s.whatsapp.net")) {
@@ -308,7 +394,7 @@ class AutomationTools {
             logIdentifier = target;
             displayName = target.includes("@g.us") ? "مجموعة واتساب" : "عزيزي العميل";
           } else {
-            let cleanPhone = target.replace(/\D/g, "");
+            cleanPhone = target.replace(/\D/g, "");
             if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
               cleanPhone = "2" + cleanPhone;
             }
@@ -319,7 +405,7 @@ class AutomationTools {
         } else if (typeof target === "object" && target) {
           displayName = target.name || target.subject || (target.jid?.includes("@g.us") ? "مجموعة واتساب" : "عزيزي العميل");
           let rawPhone = target.phone || "";
-          let cleanPhone = rawPhone.replace(/\D/g, "");
+          cleanPhone = rawPhone.replace(/\D/g, "");
           if (cleanPhone.startsWith("01") && cleanPhone.length === 11) {
             cleanPhone = "2" + cleanPhone;
           }
@@ -342,11 +428,48 @@ class AutomationTools {
           }
         }
 
-        // Personalize template
-        const personalizedMsg = template
+        // 1. WhatsApp verification check if enabled
+        if (verifyWhatsApp && !jid.includes("@g.us") && typeof whatsappInstance.isOnWhatsApp === "function") {
+          try {
+            const check = await whatsappInstance.isOnWhatsApp(cleanPhone || jid);
+            if (check && check.exists === false) {
+              failedCount++;
+              console.log(`⚠️ [Anti-Ban Guard] Skipped non-WhatsApp number: ${logIdentifier}`);
+              await crmDB.logCampaignItem(campaignId, logIdentifier, "failed", "الرقم غير مسجل في واتساب");
+              await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "running");
+              if (ioEmitter) {
+                ioEmitter("campaign_progress", {
+                  campaignId,
+                  sentCount,
+                  failedCount,
+                  total: contacts.length,
+                  status: "running",
+                  percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
+                });
+              }
+              continue;
+            }
+          } catch (chkErr) {
+            // Non-fatal check error
+          }
+        }
+
+        // 2. Personalize template + Spintax
+        let personalizedMsg = template
           .replace(/{name}/g, displayName)
           .replace(/{phone}/g, logIdentifier);
 
+        if (enableSpintax) {
+          personalizedMsg = AutomationTools.parseSpintax(personalizedMsg);
+        }
+
+        // 3. Human typing simulation
+        if (enableTyping && typeof whatsappInstance.simulateHumanTyping === "function") {
+          const typingMs = Math.min(5000, Math.max(2000, Math.floor(personalizedMsg.length * 25)));
+          await whatsappInstance.simulateHumanTyping(jid, typingMs);
+        }
+
+        // 4. Send Message
         try {
           let imageBuffer = null;
           if (imagePath) {
@@ -355,6 +478,7 @@ class AutomationTools {
           }
           await whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer);
           sentCount++;
+          sentInCurrentBatch++;
           await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
         } catch (err) {
           failedCount++;
@@ -378,10 +502,11 @@ class AutomationTools {
         }
 
         if (!isLast) {
-          // Anti-ban random jitter: delaySeconds +/- 3 seconds
-          const randomJitter = (Math.random() * 4 - 2);
-          const finalDelay = Math.max(3, (delaySeconds + randomJitter)) * 1000;
-          await new Promise((r) => setTimeout(r, finalDelay));
+          // Anti-Ban Random Delay between minDelay and maxDelay
+          const effMin = minDelay ? Number(minDelay) : Math.max(3, delaySeconds - 2);
+          const effMax = maxDelay ? Number(maxDelay) : Math.max(effMin, delaySeconds + 3);
+          const randomDelay = Math.floor(Math.random() * (effMax - effMin + 1) + effMin) * 1000;
+          await new Promise((r) => setTimeout(r, randomDelay));
         }
       }
       

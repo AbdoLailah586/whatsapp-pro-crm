@@ -827,7 +827,19 @@ app.get("/api/campaigns", async (req, res) => {
 
 app.post("/api/campaigns", upload.fields([{ name: "image", maxCount: 1 }, { name: "jsonFile", maxCount: 1 }]), async (req, res) => {
   try {
-    let { title, template, contacts, delaySeconds } = req.body || {};
+    let {
+      title,
+      template,
+      contacts,
+      delaySeconds,
+      minDelay,
+      maxDelay,
+      batchSize,
+      batchCooldownMinutes,
+      enableTyping,
+      enableSpintax,
+      verifyWhatsApp,
+    } = req.body || {};
     let imagePath = null;
 
     if (req.files && req.files.image && req.files.image[0]) {
@@ -866,6 +878,13 @@ app.post("/api/campaigns", upload.fields([{ name: "image", maxCount: 1 }, { name
       contacts,
       imagePath,
       delaySeconds: Number(delaySeconds) || 8,
+      minDelay: minDelay !== undefined && minDelay !== null && minDelay !== "" ? Number(minDelay) : null,
+      maxDelay: maxDelay !== undefined && maxDelay !== null && maxDelay !== "" ? Number(maxDelay) : null,
+      batchSize: batchSize !== undefined && batchSize !== null && batchSize !== "" ? Number(batchSize) : 25,
+      batchCooldownMinutes: batchCooldownMinutes !== undefined && batchCooldownMinutes !== null && batchCooldownMinutes !== "" ? Number(batchCooldownMinutes) : 45,
+      enableTyping: enableTyping === undefined || enableTyping === null || enableTyping === "true" || enableTyping === true || enableTyping === "1",
+      enableSpintax: enableSpintax === undefined || enableSpintax === null || enableSpintax === "true" || enableSpintax === true || enableSpintax === "1",
+      verifyWhatsApp: verifyWhatsApp === undefined || verifyWhatsApp === null || verifyWhatsApp === "true" || verifyWhatsApp === true || verifyWhatsApp === "1",
       ioEmitter: (evt, payload) => io.to(`user:${userId}`).emit(evt, payload),
     });
 
@@ -880,14 +899,23 @@ app.post("/api/campaigns/:id/control", async (req, res) => {
     const campaignId = req.params.id;
     const { action } = req.body;
 
-    if (!['pause', 'resume', 'cancel'].includes(action)) {
-      return res.status(400).json({ error: "Invalid action. Use 'pause', 'resume', or 'cancel'." });
+    if (!['pause', 'resume', 'cancel', 'skip_cooldown'].includes(action)) {
+      return res.status(400).json({ error: "Invalid action. Use 'pause', 'resume', 'cancel', or 'skip_cooldown'." });
     }
 
     if (AutomationTools.campaignState[campaignId]) {
-      AutomationTools.campaignState[campaignId] = action === 'resume' ? 'running' : action === 'pause' ? 'paused' : 'cancelled';
+      let newStatus = 'running';
+      if (action === 'resume' || action === 'skip_cooldown') {
+        newStatus = 'running';
+        AutomationTools.campaignState[campaignId] = 'running';
+      } else if (action === 'pause') {
+        newStatus = 'paused';
+        AutomationTools.campaignState[campaignId] = 'paused';
+      } else if (action === 'cancel') {
+        newStatus = 'cancelled';
+        AutomationTools.campaignState[campaignId] = 'cancelled';
+      }
 
-      let newStatus = action === 'resume' ? 'running' : action === 'pause' ? 'paused' : 'cancelled';
       await crmDB.updateCampaignStatusOnly(campaignId, newStatus);
 
       io.to(`user:${req.userId}`).emit("campaign_status_changed", { campaignId, status: newStatus });

@@ -1359,17 +1359,53 @@
                   '</div>' +
                 '</div>' +
                 '<div class="field"><label>نص الرسالة — استخدم <span class="mono">{name}</span> لاسم العميل</label>' +
-                  '<textarea id="cTemplate" rows="4" placeholder="أهلاً {name}، خصم 20% خاص ليك النهاردة!"></textarea></div>' +
+                  '<textarea id="cTemplate" rows="4" placeholder="أهلاً {name}، خصم 20% خاص ليك النهاردة!"></textarea>' +
+                  '<span class="help" style="margin-top:4px">💡 يدعم Spintax لتنويع النصوص تلقائياً ومنع الحظر، مثال: <span class="mono">{أهلاً|مرحباً|السلام عليكم}</span> {name}</span></div>' +
                 '<div class="field"><label>صورة (اختياري)</label>' +
                   '<div style="display:flex;gap:6px"><input type="file" id="cImage" accept="image/*">' +
                   '<button class="btn btn-sm" data-g="clear-img">مسح</button></div></div>' +
-                '<div class="field"><label>الفاصل بين الرسائل (ثانية)</label>' +
-                  '<input type="number" id="cDelay" value="8" min="3" max="60">' +
-                  '<span class="help">فاصل أقل من ٦ ثواني بيزوّد احتمال حظر الرقم.</span></div>' +
+                '<div class="field">' +
+                  '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+                    '<label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:600">' +
+                      '<i class="fa-solid fa-shield-halved" style="color:var(--accent)"></i> درع الحماية الذكي ضد الحظر (Anti-Ban Guard)' +
+                    '</label>' +
+                    '<span class="tag" data-tone="ok" style="font-size:11px">تلقائي فعال</span>' +
+                  '</div>' +
+                  '<div style="background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-2);padding:10px 12px">' +
+                    '<div style="margin-bottom:8px">' +
+                      '<label style="font-size:11.5px;color:var(--faint);display:block;margin-bottom:4px">مستوى الحماية المطبق:</label>' +
+                      '<select id="cGuardPreset" style="width:100%;height:34px;font-size:12.5px;border-radius:var(--r-1)">' +
+                        '<option value="max" selected>🛡️ أقصى حماية (موصى بها للأرقام المستخرجة والجديدة)</option>' +
+                        '<option value="balanced">⚖️ متوازن (فاصل 20-40 ثانية، راحة 20 دقيقة لكل 35 رسالة)</option>' +
+                        '<option value="fast">⚡ إرسال سريع (للعملاء الحاليين والمجموعات فقط)</option>' +
+                        '<option value="custom">⚙️ إعداد يدوي مخصص</option>' +
+                      '</select>' +
+                    '</div>' +
+                    '<div id="cCustomGuardBox" class="hidden" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;padding-top:8px;border-top:1px dashed var(--line)">' +
+                      '<div><label style="font-size:11px">الحد الأدنى للفاصل (ثانية)</label><input type="number" id="cMinDelay" value="35" min="3" max="300" style="font-size:12px;height:30px"></div>' +
+                      '<div><label style="font-size:11px">الحد الأقصى للفاصل (ثانية)</label><input type="number" id="cMaxDelay" value="75" min="5" max="600" style="font-size:12px;height:30px"></div>' +
+                      '<div><label style="font-size:11px">الرسائل لكل دفعة</label><input type="number" id="cBatchSize" value="25" min="5" max="500" style="font-size:12px;height:30px"></div>' +
+                      '<div><label style="font-size:11px">استراحة الأمان (دقيقة)</label><input type="number" id="cBatchCooldown" value="45" min="1" max="360" style="font-size:12px;height:30px"></div>' +
+                    '</div>' +
+                    '<div style="display:flex;flex-direction:column;gap:3px">' +
+                      '<label class="check-row" style="border:0;padding:2px 0;font-size:11.5px"><input type="checkbox" id="cEnableTyping" checked><span class="n">محاكاة الكتابة البشرية (جاري الكتابة... لعدة ثوانٍ)</span></label>' +
+                      '<label class="check-row" style="border:0;padding:2px 0;font-size:11.5px"><input type="checkbox" id="cEnableSpintax" checked><span class="n">تفعيل تنويع الكلمات Spintax تلقائياً</span></label>' +
+                      '<label class="check-row" style="border:0;padding:2px 0;font-size:11.5px"><input type="checkbox" id="cVerifyWhatsApp" checked><span class="n">فحص وتسجيل الرقم على واتساب قبل الإرسال</span></label>' +
+                    '</div>' +
+                    '<div id="cGuardSummary" style="font-size:11px;color:var(--faint);margin-top:6px;padding:5px 8px;background:var(--surface);border-radius:var(--r-1)">' +
+                      '✨ فاصل عشوائي 35–75 ثانية · دفعة 25 رسالة · استراحة أمان 45 دقيقة' +
+                    '</div>' +
+                  '</div>' +
+                '</div>' +
+                '<input type="hidden" id="cDelay" value="35">' +
                 '<button class="btn btn-primary btn-block" data-act="start-campaign"><i class="fa-solid fa-paper-plane"></i> إطلاق الحملة</button>' +
                 '<div class="progress hidden" id="cProgress" style="margin-top:14px">' +
                   '<div class="progress-top"><span id="cProgressText">—</span><span class="mono" id="cProgressPct">0%</span></div>' +
                   '<div class="progress-track"><div class="progress-fill" id="cProgressBar"></div></div>' +
+                  '<div id="cCoolingAlert" class="hidden" style="margin-top:8px;padding:8px 10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:var(--r-1);font-size:12px;color:var(--warn,#f59e0b);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">' +
+                    '<span><i class="fa-solid fa-mug-hot"></i> فترة راحة استراتيجية لمنع الحظر</span>' +
+                    '<button class="btn btn-sm" data-cc="skip-cooldown" style="font-size:11px;padding:2px 8px;background:var(--warn,#f59e0b);color:#000;font-weight:600">⚡ تخطي الاستراحة والمتابعة الآن</button>' +
+                  '</div>' +
                   '<div style="display:flex;gap:6px;margin-top:8px">' +
                     '<button class="btn btn-sm" data-cc="pause">إيقاف مؤقت</button>' +
                     '<button class="btn btn-sm hidden" data-cc="resume">استئناف</button>' +
@@ -1445,6 +1481,32 @@
           jsonLimit.addEventListener("input", function () { applyJsonFilters(); });
         }
 
+        var guardSel = el.querySelector("#cGuardPreset");
+        var customBox = el.querySelector("#cCustomGuardBox");
+        var guardSummary = el.querySelector("#cGuardSummary");
+        if (guardSel) {
+          guardSel.addEventListener("change", function (e) {
+            var val = e.target.value;
+            if (customBox) customBox.classList.toggle("hidden", val !== "custom");
+            if (val === "max") {
+              if (guardSummary) guardSummary.textContent = "✨ فاصل عشوائي 35–75 ثانية · دفعة 25 رسالة · استراحة أمان 45 دقيقة";
+              if ($("cEnableTyping")) $("cEnableTyping").checked = true;
+              if ($("cEnableSpintax")) $("cEnableSpintax").checked = true;
+              if ($("cVerifyWhatsApp")) $("cVerifyWhatsApp").checked = true;
+            } else if (val === "balanced") {
+              if (guardSummary) guardSummary.textContent = "✨ فاصل عشوائي 20–40 ثانية · دفعة 35 رسالة · استراحة أمان 20 دقيقة";
+              if ($("cEnableTyping")) $("cEnableTyping").checked = true;
+              if ($("cEnableSpintax")) $("cEnableSpintax").checked = true;
+              if ($("cVerifyWhatsApp")) $("cVerifyWhatsApp").checked = true;
+            } else if (val === "fast") {
+              if (guardSummary) guardSummary.textContent = "⚡ فاصل عشوائي 8–15 ثانية · دفعة 60 رسالة · استراحة أمان 10 دقائق";
+              if ($("cEnableTyping")) $("cEnableTyping").checked = false;
+            } else if (val === "custom") {
+              if (guardSummary) guardSummary.textContent = "⚙️ إعدادات يدوية مخصصة حسب رغبتك";
+            }
+          });
+        }
+
         if (S.uploadedJsonFile && S.uploadedJsonNormalized && S.uploadedJsonNormalized.length) {
           renderJsonLoadedState();
           applyJsonFilters();
@@ -1458,8 +1520,8 @@
   function campaignsHistory() {
     if (!S.campaigns.length) return '<p class="faint" style="font-size:12.5px">لسه مفيش حملات.</p>';
     return '<div class="tile-list">' + S.campaigns.map(function (c) {
-      var tone = c.status === "completed" ? "ok" : c.status === "cancelled" ? "danger" : "warn";
-      var label = { completed: "مكتملة", running: "جارية", paused: "متوقفة", cancelled: "ملغية" }[c.status] || c.status;
+      var tone = c.status === "completed" ? "ok" : c.status === "cancelled" ? "danger" : c.status === "cooling" ? "warn" : "warn";
+      var label = { completed: "مكتملة", running: "جارية", paused: "متوقفة", cancelled: "ملغية", cooling: "استراحة أمان" }[c.status] || c.status;
       return '<div class="li" data-campaign="' + attr(c.id) + '">' +
         '<span class="grow"><span style="display:block;font-weight:600">' + esc(c.title) + "</span>" +
         '<span class="faint" style="font-size:11px">تم ' + c.sent_count + " · فشل " + c.failed_count + " · من " + c.target_count + "</span></span>" +
@@ -1748,12 +1810,38 @@
 
     if (!contacts.length) return toast("مفيش أرقام مطابقة للجمهور المختار.", "warn");
 
-    confirmAsk("هتتبعت الحملة لـ " + contacts.length + " جهة بفاصل " + delay + " ثانية. نبدأ؟", "إطلاق").then(function (ok) {
+    var guardPreset = $("cGuardPreset") ? $("cGuardPreset").value : "max";
+    var minDelay = 35, maxDelay = 75, batchSize = 25, batchCooldown = 45;
+    if (guardPreset === "max") {
+      minDelay = 35; maxDelay = 75; batchSize = 25; batchCooldown = 45;
+    } else if (guardPreset === "balanced") {
+      minDelay = 20; maxDelay = 40; batchSize = 35; batchCooldown = 20;
+    } else if (guardPreset === "fast") {
+      minDelay = 8; maxDelay = 15; batchSize = 60; batchCooldown = 10;
+    } else if (guardPreset === "custom") {
+      minDelay = Math.max(3, parseInt($("cMinDelay") ? $("cMinDelay").value : 35) || 35);
+      maxDelay = Math.max(minDelay, parseInt($("cMaxDelay") ? $("cMaxDelay").value : 75) || 75);
+      batchSize = Math.max(1, parseInt($("cBatchSize") ? $("cBatchSize").value : 25) || 25);
+      batchCooldown = Math.max(1, parseInt($("cBatchCooldown") ? $("cBatchCooldown").value : 45) || 45);
+    }
+    var enableTyping = $("cEnableTyping") ? $("cEnableTyping").checked : true;
+    var enableSpintax = $("cEnableSpintax") ? $("cEnableSpintax").checked : true;
+    var verifyWhatsApp = $("cVerifyWhatsApp") ? $("cVerifyWhatsApp").checked : true;
+
+    var delayDesc = guardPreset === "max" ? "فاصل آمن 35-75 ثانية" : "فاصل " + minDelay + "-" + maxDelay + " ثانية";
+    confirmAsk("هتتبعت الحملة لـ " + contacts.length + " جهة (" + delayDesc + " ومحاكاة بشرية). نبدأ؟", "إطلاق").then(function (ok) {
       if (!ok) return;
       var fd = new FormData();
       fd.append("title", title);
       fd.append("template", template);
-      fd.append("delaySeconds", delay);
+      fd.append("delaySeconds", minDelay);
+      fd.append("minDelay", minDelay);
+      fd.append("maxDelay", maxDelay);
+      fd.append("batchSize", batchSize);
+      fd.append("batchCooldownMinutes", batchCooldown);
+      fd.append("enableTyping", enableTyping ? "1" : "0");
+      fd.append("enableSpintax", enableSpintax ? "1" : "0");
+      fd.append("verifyWhatsApp", verifyWhatsApp ? "1" : "0");
       fd.append("contacts", JSON.stringify(contacts));
       if (img) fd.append("image", img);
       if (audience === "json-file" && S.uploadedJsonFile) {
@@ -1771,7 +1859,7 @@
           var cid = d && (d.campaignId || (d.result && d.result.campaignId));
           if (d && d.success && cid) {
             S.activeCampaignId = cid;
-            toast("الحملة بدأت — " + (d.total || contacts.length) + " جهة", "ok");
+            toast("الحملة بدأت — " + (d.total || contacts.length) + " جهة بنظام الحماية ضد الحظر", "ok");
           } else toast((d && d.error) || "فشل بدء الحملة", "danger");
         })
         .catch(function (e) { toast(e.message, "danger"); })
@@ -1781,15 +1869,20 @@
 
   function controlCampaign(action) {
     if (!S.activeCampaignId) return;
+    var apiAction = action === "skip-cooldown" ? "skip_cooldown" : action;
     api("/api/campaigns/" + S.activeCampaignId + "/control", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: action })
+      body: JSON.stringify({ action: apiAction })
     }).then(function (d) {
       if (d && d.success) {
         if (action === "cancel") {
           $("cProgress").classList.add("hidden");
           S.activeCampaignId = null;
           toast("الحملة اتلغت", "warn");
+        } else if (action === "skip-cooldown") {
+          var cAlert = $("cCoolingAlert");
+          if (cAlert) cAlert.classList.add("hidden");
+          toast("تم تخطي استراحة الأمان ومتابعة الإرسال", "ok");
         }
       } else toast((d && d.error) || "فشل التحكم في الحملة", "danger");
     }).catch(function (e) { toast(e.message, "danger"); });
@@ -2861,7 +2954,15 @@
     var box = $("cProgress");
     if (box) {
       box.classList.remove("hidden");
-      $("cProgressText").textContent = "تم " + d.sentCount + " · فشل " + d.failedCount + " · من " + d.total;
+      var coolingBox = $("cCoolingAlert");
+      if (d.status === "cooling") {
+        if (coolingBox) coolingBox.classList.remove("hidden");
+        var mins = Math.ceil((d.remainingSeconds || 0) / 60);
+        $("cProgressText").innerHTML = '<span style="color:var(--warn,#f59e0b)"><i class="fa-solid fa-hourglass-half"></i> فترة راحة أمان: متبقي ~' + mins + ' دقيقة (أرسل ' + d.sentCount + ' من ' + d.total + ')</span>';
+      } else {
+        if (coolingBox) coolingBox.classList.add("hidden");
+        $("cProgressText").textContent = "تم " + d.sentCount + " · فشل " + d.failedCount + " · من " + d.total;
+      }
       $("cProgressPct").textContent = d.percent + "%";
       $("cProgressBar").style.width = d.percent + "%";
       box.setAttribute("data-done", d.percent >= 100 ? "1" : "0");
@@ -2873,6 +2974,8 @@
       $("boardProgressPct").textContent = d.percent + "%";
     }
     if (d.status === "completed" || d.status === "cancelled") {
+      var coolingBox = $("cCoolingAlert");
+      if (coolingBox) coolingBox.classList.add("hidden");
       toast("الحملة " + (d.status === "completed" ? "اكتملت" : "اتلغت") + " · " + d.sentCount + " ناجحة، " + d.failedCount + " فشلت",
             d.status === "completed" ? "ok" : "warn");
       fetchCampaigns();

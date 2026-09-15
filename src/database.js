@@ -115,9 +115,11 @@ class CRMDatabase {
     await this._ensurePgSchema(schema);
     const client = await this.pgPool.connect();
     try {
-      await client.query(`SET search_path TO "${schema}", public`);
+      // STRICT schema isolation: NO fallback to public to prevent any cross-tenant data leakage
+      await client.query(`SET search_path TO "${schema}"`);
       return await client.query(text, params);
     } finally {
+      try { await client.query("RESET search_path"); } catch (e) {}
       client.release();
     }
   }
@@ -127,10 +129,12 @@ class CRMDatabase {
     const client = await this.pgPool.connect();
     try {
       await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-      await client.query(`SET search_path TO "${schema}", public`);
+      // STRICT schema setting forces Postgres to create all tables inside "${schema}"
+      await client.query(`SET search_path TO "${schema}"`);
       await this._createPgTables(client);
       this._pgSchemasInitialized.add(schema);
     } finally {
+      try { await client.query("RESET search_path"); } catch (e) {}
       client.release();
     }
   }
@@ -389,6 +393,7 @@ class CRMDatabase {
     } catch (e) {
       console.error("[Database] Error creating Postgres tables:", e.message);
     } finally {
+      try { await client.query("RESET search_path"); } catch (e) {}
       client.release();
     }
     await this.migrateLidContacts();
