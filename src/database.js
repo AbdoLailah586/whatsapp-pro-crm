@@ -39,6 +39,7 @@ class CRMDatabase {
     // Multi-tenancy bookkeeping
     this._sqliteHandles = new Map(); // tenantKey -> better-sqlite3 Database
     this._pgSchemasInitialized = new Set(); // schema names already CREATE'd
+    this._waAuthTableInitializedPg = false;
 
     this.init();
   }
@@ -115,11 +116,16 @@ class CRMDatabase {
     await this._ensurePgSchema(schema);
     const client = await this.pgPool.connect();
     try {
-      // STRICT schema isolation: NO fallback to public to prevent any cross-tenant data leakage
-      await client.query(`SET search_path TO "${schema}"`);
-      return await client.query(text, params);
+      // Transaction-scoped search_path: strictly isolated even with PgBouncer / Neon poolers
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL search_path TO "${schema}"`);
+      const res = await client.query(text, params);
+      await client.query("COMMIT");
+      return res;
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch (e) {}
+      throw err;
     } finally {
-      try { await client.query("RESET search_path"); } catch (e) {}
       client.release();
     }
   }
@@ -129,7 +135,6 @@ class CRMDatabase {
     const client = await this.pgPool.connect();
     try {
       await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-      // STRICT schema setting forces Postgres to create all tables inside "${schema}"
       await client.query(`SET search_path TO "${schema}"`);
       await this._createPgTables(client);
       this._pgSchemasInitialized.add(schema);
@@ -300,12 +305,21 @@ class CRMDatabase {
         created_at INTEGER
       );
 
-      -- Generic per-tenant key/value store: WhatsApp (Baileys) auth-state blobs,
-      -- bot settings (botEnabled/aiMode/...), and anything else simple.
+      -- Generic per-tenant key/value store: bot settings (botEnabled/aiMode/...), etc.
       CREATE TABLE IF NOT EXISTS tenant_kv (
         key TEXT PRIMARY KEY,
         value TEXT
       );
+
+      -- Dedicated WhatsApp (Baileys) session table with strict compound primary key
+      CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+        user_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON whatsapp_sessions(user_id);
 
       CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_jid, timestamp);
       CREATE INDEX IF NOT EXISTS idx_contacts_time ON contacts(last_message_time DESC);
@@ -410,9 +424,16 @@ class CRMDatabase {
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS expires_at BIGINT;
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS phone TEXT;
-        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS notes TEXT;
-        UPDATE public.platform_users SET is_admin = TRUE, status = 'active' WHERE id = 'legacy' OR email LIKE '%01554826209%' OR email LIKE '%abdolailah586%';
+        CREATE TABLE IF NOT EXISTS public.whatsapp_sessions (
+          user_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          PRIMARY KEY (user_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON public.whatsapp_sessions(user_id);
       `);
+      this._waAuthTableInitializedPg = true;
       this._pgSchemasInitialized.add("public");
       console.log("🐘 [Database] PostgreSQL enterprise tables & admin columns initialized successfully.");
     } catch (e) {
@@ -1552,22 +1573,207 @@ class CRMDatabase {
     return updated;
   }
 
-  // --- WhatsApp (Baileys) auth-state blobs - explicitly tenant-scoped so
-  // whatsapp.js can call these from outside any HTTP request context ---
+  // ==========================================================
+  // WhatsApp (Baileys) auth-state storage
+  // ----------------------------------------------------------
+  // Guaranteed 100% strict isolation: `user_id` is an explicit
+  // SQL parameter in the compound primary key (user_id, key).
+  // Completely immune to AsyncLocalStorage loss, PgBouncer pooler
+  // switching, or schema fallback bugs.
+  // ==========================================================
+
+  async initWaAuthTablePg() {
+    if (this._waAuthTableInitializedPg) return;
+    try {
+      await this.pgPool.query(`
+        CREATE TABLE IF NOT EXISTS public.whatsapp_sessions (
+          user_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          PRIMARY KEY (user_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON public.whatsapp_sessions(user_id);
+      `);
+      this._waAuthTableInitializedPg = true;
+    } catch (e) {
+      console.warn("[Database] initWaAuthTablePg notice:", e.message);
+    }
+  }
+
+  _ensureWaAuthTableSqlite(db) {
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+          user_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (user_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON whatsapp_sessions(user_id);
+      `);
+    } catch (e) {}
+  }
+
   async getAuthBlob(userId, key) {
-    return runAsTenant(userId, () => this.kvGet(`wa_auth:${key}`));
+    const uid = String(userId || LEGACY_TENANT);
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      const res = await this.pgPool.query(
+        "SELECT value FROM public.whatsapp_sessions WHERE user_id = $1 AND key = $2",
+        [uid, key]
+      );
+      if (res.rows[0]) return res.rows[0].value;
+
+      // Backward compatibility fallback to migrate old tenant_kv row if present
+      try {
+        const legacyRes = await this.pgPool.query(
+          `SELECT value FROM "${pgSchemaFor(uid)}".tenant_kv WHERE key = $1`,
+          [`wa_auth:${key}`]
+        );
+        if (legacyRes.rows[0] && legacyRes.rows[0].value) {
+          await this.setAuthBlob(uid, key, legacyRes.rows[0].value);
+          return legacyRes.rows[0].value;
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    const row = db.prepare("SELECT value FROM whatsapp_sessions WHERE user_id = ? AND key = ?").get(uid, key);
+    if (row) return row.value;
+
+    // Backward compatibility fallback to migrate old SQLite row if present
+    try {
+      const oldHandle = this._getSqliteHandle(uid);
+      const oldRow = oldHandle.prepare("SELECT value FROM tenant_kv WHERE key = ?").get(`wa_auth:${key}`);
+      if (oldRow && oldRow.value) {
+        await this.setAuthBlob(uid, key, oldRow.value);
+        return oldRow.value;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async getAuthBlobs(userId, keys) {
+    if (!keys || keys.length === 0) return {};
+    const uid = String(userId || LEGACY_TENANT);
+    const result = {};
+
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      const res = await this.pgPool.query(
+        "SELECT key, value FROM public.whatsapp_sessions WHERE user_id = $1 AND key = ANY($2)",
+        [uid, keys]
+      );
+      for (const row of res.rows) {
+        result[row.key] = row.value;
+      }
+      return result;
+    }
+
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    const placeholders = keys.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT key, value FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).all(uid, ...keys);
+    for (const r of rows) {
+      result[r.key] = r.value;
+    }
+    return result;
   }
 
   async setAuthBlob(userId, key, value) {
-    return runAsTenant(userId, () => this.kvSet(`wa_auth:${key}`, value));
+    const uid = String(userId || LEGACY_TENANT);
+    const now = Date.now();
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      return this.pgPool.query(
+        `INSERT INTO public.whatsapp_sessions (user_id, key, value, updated_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [uid, key, value, now]
+      );
+    }
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    return db.prepare(
+      `INSERT INTO whatsapp_sessions (user_id, key, value, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).run(uid, key, value, now);
+  }
+
+  async setAuthBlobs(userId, entries) {
+    if (!entries || entries.length === 0) return;
+    const uid = String(userId || LEGACY_TENANT);
+    const now = Date.now();
+
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      const client = await this.pgPool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const { key, value } of entries) {
+          await client.query(
+            `INSERT INTO public.whatsapp_sessions (user_id, key, value, updated_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+            [uid, key, value, now]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (err) {
+        try { await client.query("ROLLBACK"); } catch (e) {}
+        throw err;
+      } finally {
+        client.release();
+      }
+      return;
+    }
+
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    const insertStmt = db.prepare(
+      `INSERT INTO whatsapp_sessions (user_id, key, value, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    );
+    const tx = db.transaction((items) => {
+      for (const { key, value } of items) {
+        insertStmt.run(uid, key, value, now);
+      }
+    });
+    tx(entries);
   }
 
   async deleteAuthBlob(userId, key) {
-    return runAsTenant(userId, () => this.kvDelete(`wa_auth:${key}`));
+    const uid = String(userId || LEGACY_TENANT);
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      return this.pgPool.query(
+        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1 AND key = $2",
+        [uid, key]
+      );
+    }
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    return db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ? AND key = ?").run(uid, key);
   }
 
   async clearAuthBlobs(userId) {
-    return runAsTenant(userId, () => this.kvDeletePrefix("wa_auth:"));
+    const uid = String(userId || LEGACY_TENANT);
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      return this.pgPool.query(
+        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1",
+        [uid]
+      );
+    }
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    return db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ?").run(uid);
   }
 
   // ==========================================================

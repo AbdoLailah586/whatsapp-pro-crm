@@ -1,53 +1,31 @@
 // ============================================================
-// Database-backed Baileys auth state.
+// Database-backed Baileys auth state (Strict Multi-Tenant Isolation)
 //
 // By default Baileys (@whiskeysockets/baileys) persists the WhatsApp
 // login session as a folder of JSON files on local disk
-// (useMultiFileAuthState). That's a problem on Railway (and most
-// cloud hosts): local disk is wiped on every redeploy/restart unless
-// a persistent volume is attached, which is exactly why "stay logged
-// in" was not surviving.
+// (useMultiFileAuthState). That causes collisions and session loss
+// across redeploys, restarts, or multiple accounts.
 //
-// This module implements the same auth-state contract Baileys expects
-// (`{ state: { creds, keys }, saveCreds }`) but reads/writes every
-// piece of it as rows in the tenant's own database (Postgres schema
-// or SQLite file - see tenant.js/database.js), keyed by account.
-// That means the WhatsApp login is tied to the website account itself,
-// exactly like a normal "keep me signed in" flow, and survives
-// redeploys, container restarts, and moving hosts entirely.
+// This module stores every account's auth-state in a dedicated
+// `whatsapp_sessions` table with compound primary key (user_id, key).
+// Key operations are batched so large key sets (100+ keys) are read
+// and written in 1-2 queries instead of 100+ concurrent connections.
 // ============================================================
 
-const { initAuthCreds, BufferJSON, proto, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const { initAuthCreds, BufferJSON, proto } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require("path");
 const crmDB = require("./database");
 const { LEGACY_TENANT } = require("./tenant");
 
 async function useDbAuthState(userId) {
-  const isLegacy = !userId || userId === LEGACY_TENANT;
+  const uid = String(userId || LEGACY_TENANT);
+  const isLegacy = uid === LEGACY_TENANT;
   const legacyAuthDir = path.join(__dirname, "..", "auth_info");
 
-  // For the legacy tenant, if auth_info with creds.json exists, use useMultiFileAuthState
-  // so the established WhatsApp session (all 66,000+ keys and creds) is directly used!
-  if (isLegacy && fs.existsSync(path.join(legacyAuthDir, "creds.json"))) {
-    const multiFile = await useMultiFileAuthState(legacyAuthDir);
-    return {
-      state: multiFile.state,
-      saveCreds: multiFile.saveCreds,
-      clearAll: async () => {
-        try {
-          await crmDB.clearAuthBlobs(LEGACY_TENANT);
-          const credsFile = path.join(legacyAuthDir, "creds.json");
-          if (fs.existsSync(credsFile)) fs.unlinkSync(credsFile);
-        } catch (e) {
-          console.warn("[Auth] clearAll warning:", e.message);
-        }
-      },
-    };
-  }
   const readData = async (key) => {
     try {
-      const raw = await crmDB.getAuthBlob(userId, key);
+      const raw = await crmDB.getAuthBlob(uid, key);
       if (!raw) return null;
       return JSON.parse(raw, BufferJSON.reviver);
     } catch (e) {
@@ -56,57 +34,148 @@ async function useDbAuthState(userId) {
   };
 
   const writeData = async (key, data) => {
-    await crmDB.setAuthBlob(userId, key, JSON.stringify(data, BufferJSON.replacer));
+    await crmDB.setAuthBlob(uid, key, JSON.stringify(data, BufferJSON.replacer));
   };
 
   const removeData = async (key) => {
-    await crmDB.deleteAuthBlob(userId, key);
+    await crmDB.deleteAuthBlob(uid, key);
   };
 
-  const creds = (await readData("creds")) || initAuthCreds();
+  // 1. Initial creds resolution
+  let creds = await readData("creds");
 
-  return {
-    state: {
-      creds,
-      keys: {
-        get: async (type, ids) => {
-          const data = {};
-          await Promise.all(
-            ids.map(async (id) => {
-              let value = await readData(`${type}-${id}`);
-              if (!value) {
-                const altKey = `${type}-${id.replace(/\//g, '__').replace(/:/g, '-')}`;
-                if (altKey !== `${type}-${id}`) {
-                  value = await readData(altKey);
-                }
+  // If this is the legacy tenant and no creds are in the DB yet, migrate from disk if present
+  if (!creds && isLegacy) {
+    try {
+      const legacyCredsFile = path.join(legacyAuthDir, "creds.json");
+      if (fs.existsSync(legacyCredsFile)) {
+        const fileContent = fs.readFileSync(legacyCredsFile, "utf-8");
+        creds = JSON.parse(fileContent, BufferJSON.reviver);
+        if (creds) {
+          await writeData("creds", creds);
+          console.log("[Auth] Successfully migrated legacy disk WhatsApp credentials into whatsapp_sessions table.");
+        }
+      }
+    } catch (e) {
+      console.warn("[Auth] Legacy disk creds migration notice:", e.message);
+    }
+  }
+
+  if (!creds) {
+    creds = initAuthCreds();
+  }
+
+  const stateObj = {
+    creds,
+    keys: {
+      get: async (type, ids) => {
+        const data = {};
+        if (!ids || ids.length === 0) return data;
+
+        // 1. Batch fetch all primary keys at once
+        const keyMap = new Map(); // primaryKey -> id
+        const keysToFetch = [];
+        for (const id of ids) {
+          const pk = `${type}-${id}`;
+          keyMap.set(pk, id);
+          keysToFetch.push(pk);
+        }
+
+        const rawResults = await crmDB.getAuthBlobs(uid, keysToFetch);
+
+        const missingIds = [];
+        for (const id of ids) {
+          const pk = `${type}-${id}`;
+          const raw = rawResults[pk];
+          if (raw) {
+            try {
+              let parsed = JSON.parse(raw, BufferJSON.reviver);
+              if (type === "app-state-sync-key" && parsed) {
+                parsed = proto.Message.AppStateSyncKeyData.fromObject(parsed);
               }
-              if (type === "app-state-sync-key" && value) {
-                value = proto.Message.AppStateSyncKeyData.fromObject(value);
-              }
-              data[id] = value;
-            })
-          );
-          return data;
-        },
-        set: async (data) => {
-          const tasks = [];
-          for (const category in data) {
-            for (const id in data[category]) {
-              const value = data[category][id];
-              const key = `${category}-${id}`;
-              tasks.push(value ? writeData(key, value) : removeData(key));
+              data[id] = parsed;
+            } catch (e) {
+              data[id] = null;
+            }
+          } else {
+            missingIds.push(id);
+          }
+        }
+
+        // 2. For any missing ids, try alternate key format (with replaced chars)
+        if (missingIds.length > 0) {
+          const altKeysToFetch = [];
+          const altKeyMap = new Map(); // altKey -> id
+          for (const id of missingIds) {
+            const altKey = `${type}-${String(id).replace(/\//g, "__").replace(/:/g, "-")}`;
+            if (altKey !== `${type}-${id}`) {
+              altKeysToFetch.push(altKey);
+              altKeyMap.set(altKey, id);
+            } else {
+              data[id] = null;
             }
           }
-          await Promise.all(tasks);
-        },
+
+          if (altKeysToFetch.length > 0) {
+            const altResults = await crmDB.getAuthBlobs(uid, altKeysToFetch);
+            for (const [altKey, id] of altKeyMap.entries()) {
+              const raw = altResults[altKey];
+              if (raw) {
+                try {
+                  let parsed = JSON.parse(raw, BufferJSON.reviver);
+                  if (type === "app-state-sync-key" && parsed) {
+                    parsed = proto.Message.AppStateSyncKeyData.fromObject(parsed);
+                  }
+                  data[id] = parsed;
+                } catch (e) {
+                  data[id] = null;
+                }
+              } else {
+                data[id] = null;
+              }
+            }
+          }
+        }
+
+        return data;
+      },
+      set: async (data) => {
+        const toWrite = [];
+        const toDelete = [];
+
+        for (const category in data) {
+          for (const id in data[category]) {
+            const value = data[category][id];
+            const key = `${category}-${id}`;
+            if (value) {
+              toWrite.push({
+                key,
+                value: JSON.stringify(value, BufferJSON.replacer),
+              });
+            } else {
+              toDelete.push(key);
+            }
+          }
+        }
+
+        if (toWrite.length > 0) {
+          await crmDB.setAuthBlobs(uid, toWrite);
+        }
+        if (toDelete.length > 0) {
+          await Promise.all(toDelete.map((k) => removeData(k)));
+        }
       },
     },
+  };
+
+  return {
+    state: stateObj,
     saveCreds: async () => {
-      await writeData("creds", creds);
+      await writeData("creds", stateObj.creds);
     },
     // Fully clears this account's WhatsApp session (used on logout / relink)
     clearAll: async () => {
-      await crmDB.clearAuthBlobs(userId);
+      await crmDB.clearAuthBlobs(uid);
     },
   };
 }

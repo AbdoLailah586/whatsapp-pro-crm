@@ -82,16 +82,19 @@ class WhatsAppClient {
       const { state, saveCreds } = await useDbAuthState(this.userId);
       const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
 
+      const browserTag = `Acc-${String(this.userId).replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "main"}`;
       this.socket = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
         auth: state,
-        browser: Browsers.windows("Desktop"),
+        browser: ["WhatsApp Pro", browserTag, "2.0.0"],
         syncFullHistory: false,
       });
 
-      this.socket.ev.on("creds.update", saveCreds);
+      this.socket.ev.on("creds.update", () =>
+        runAsTenant(this.userId, () => saveCreds())
+      );
 
       this.socket.ev.on("connection.update", (update) =>
         runAsTenant(this.userId, () => this._handleConnectionUpdate(update))
