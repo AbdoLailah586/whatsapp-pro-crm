@@ -368,9 +368,23 @@ class CRMDatabase {
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         display_name TEXT,
+        is_admin INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        expires_at INTEGER,
+        phone TEXT,
+        notes TEXT,
         created_at INTEGER
       );
     `);
+    // Migration helpers if table already existed
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN is_admin INTEGER DEFAULT 0;`); } catch (e) {}
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN status TEXT DEFAULT 'active';`); } catch (e) {}
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN expires_at INTEGER;`); } catch (e) {}
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN phone TEXT;`); } catch (e) {}
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN notes TEXT;`); } catch (e) {}
+    try {
+      db.prepare(`UPDATE platform_users SET is_admin = 1, status = 'active' WHERE id = 'legacy' OR email LIKE '%01554826209%' OR email LIKE '%abdolailah586%'`).run();
+    } catch (e) {}
   }
 
   async initPostgresTables() {
@@ -385,11 +399,22 @@ class CRMDatabase {
           email TEXT UNIQUE NOT NULL,
           password_hash TEXT NOT NULL,
           display_name TEXT,
+          is_admin BOOLEAN DEFAULT FALSE,
+          status TEXT DEFAULT 'active',
+          expires_at BIGINT,
+          phone TEXT,
+          notes TEXT,
           created_at BIGINT
         );
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS expires_at BIGINT;
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS phone TEXT;
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS notes TEXT;
+        UPDATE public.platform_users SET is_admin = TRUE, status = 'active' WHERE id = 'legacy' OR email LIKE '%01554826209%' OR email LIKE '%abdolailah586%';
       `);
       this._pgSchemasInitialized.add("public");
-      console.log("🐘 [Database] PostgreSQL enterprise tables initialized successfully.");
+      console.log("🐘 [Database] PostgreSQL enterprise tables & admin columns initialized successfully.");
     } catch (e) {
       console.error("[Database] Error creating Postgres tables:", e.message);
     } finally {
@@ -1557,24 +1582,132 @@ class CRMDatabase {
     return this._legacySqliteDb.prepare("SELECT COUNT(*) as count FROM platform_users").get().count;
   }
 
-  async createUser({ id, email, passwordHash, displayName }) {
+  async createUser({ id, email, passwordHash, displayName, isAdmin = false, status = "active", expiresAt = null, phone = "", notes = "" }) {
     const now = Date.now();
+    const cleanEmail = email.toLowerCase().trim();
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
         await client.query(
-          "INSERT INTO public.platform_users (id, email, password_hash, display_name, created_at) VALUES ($1,$2,$3,$4,$5)",
-          [id, email.toLowerCase().trim(), passwordHash, displayName || "", now]
+          "INSERT INTO public.platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+          [id, cleanEmail, passwordHash, displayName || "", !!isAdmin, status || "active", expiresAt || null, phone || "", notes || "", now]
         );
       } finally {
         client.release();
       }
     } else {
       this._legacySqliteDb.prepare(
-        "INSERT INTO platform_users (id, email, password_hash, display_name, created_at) VALUES (?,?,?,?,?)"
-      ).run(id, email.toLowerCase().trim(), passwordHash, displayName || "", now);
+        "INSERT INTO platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+      ).run(id, cleanEmail, passwordHash, displayName || "", isAdmin ? 1 : 0, status || "active", expiresAt || null, phone || "", notes || "", now);
     }
-    return { id, email: email.toLowerCase().trim(), displayName: displayName || "", createdAt: now };
+    return { id, email: cleanEmail, displayName: displayName || "", isAdmin: !!isAdmin, status, expiresAt, phone, notes, createdAt: now };
+  }
+
+  async getAllUsers() {
+    if (this.isPostgres) {
+      const client = await this.pgPool.connect();
+      try {
+        const res = await client.query(
+          "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, created_at FROM public.platform_users ORDER BY created_at DESC"
+        );
+        return res.rows.map(r => ({
+          ...r,
+          is_admin: !!r.is_admin,
+          expires_at: r.expires_at ? Number(r.expires_at) : null,
+          created_at: Number(r.created_at)
+        }));
+      } finally {
+        client.release();
+      }
+    }
+    const rows = this._legacySqliteDb.prepare(
+      "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, created_at FROM platform_users ORDER BY created_at DESC"
+    ).all();
+    return rows.map(r => ({
+      ...r,
+      is_admin: !!r.is_admin,
+      expires_at: r.expires_at ? Number(r.expires_at) : null,
+      created_at: Number(r.created_at)
+    }));
+  }
+
+  async updateUser(id, updates = {}) {
+    const user = await this.getUserById(id);
+    if (!user) return null;
+
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (updates.displayName !== undefined) {
+      fields.push(this.isPostgres ? `display_name = $${idx++}` : "display_name = ?");
+      values.push(updates.displayName);
+    }
+    if (updates.passwordHash) {
+      fields.push(this.isPostgres ? `password_hash = $${idx++}` : "password_hash = ?");
+      values.push(updates.passwordHash);
+    }
+    if (updates.status !== undefined) {
+      fields.push(this.isPostgres ? `status = $${idx++}` : "status = ?");
+      values.push(updates.status);
+    }
+    if (updates.expiresAt !== undefined) {
+      fields.push(this.isPostgres ? `expires_at = $${idx++}` : "expires_at = ?");
+      values.push(updates.expiresAt);
+    }
+    if (updates.phone !== undefined) {
+      fields.push(this.isPostgres ? `phone = $${idx++}` : "phone = ?");
+      values.push(updates.phone);
+    }
+    if (updates.notes !== undefined) {
+      fields.push(this.isPostgres ? `notes = $${idx++}` : "notes = ?");
+      values.push(updates.notes);
+    }
+    if (updates.isAdmin !== undefined) {
+      fields.push(this.isPostgres ? `is_admin = $${idx++}` : "is_admin = ?");
+      values.push(this.isPostgres ? !!updates.isAdmin : (updates.isAdmin ? 1 : 0));
+    }
+
+    if (fields.length === 0) return user;
+
+    if (this.isPostgres) {
+      values.push(id);
+      const client = await this.pgPool.connect();
+      try {
+        await client.query(`UPDATE public.platform_users SET ${fields.join(", ")} WHERE id = $${idx}`, values);
+      } finally {
+        client.release();
+      }
+    } else {
+      values.push(id);
+      this._legacySqliteDb.prepare(`UPDATE platform_users SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+    }
+    return this.getUserById(id);
+  }
+
+  async renewUser(id, days = 30) {
+    const user = await this.getUserById(id);
+    if (!user) return null;
+    const now = Date.now();
+    const currentExpiry = user.expires_at ? Number(user.expires_at) : now;
+    const base = currentExpiry > now ? currentExpiry : now;
+    const newExpiry = base + Number(days) * 24 * 60 * 60 * 1000;
+    return this.updateUser(id, { expiresAt: newExpiry, status: "active" });
+  }
+
+  async deleteUser(id) {
+    if (id === "legacy") return false;
+    if (this.isPostgres) {
+      const client = await this.pgPool.connect();
+      try {
+        const res = await client.query("DELETE FROM public.platform_users WHERE id = $1 AND id != 'legacy'", [id]);
+        return res.rowCount > 0;
+      } finally {
+        client.release();
+      }
+    }
+    const info = this._legacySqliteDb.prepare("DELETE FROM platform_users WHERE id = ? AND id != 'legacy'").run(id);
+    return info.changes > 0;
   }
 
   async getUserByEmail(identifier) {

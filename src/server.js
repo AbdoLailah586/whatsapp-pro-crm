@@ -99,7 +99,16 @@ authRouter.post("/register", async (req, res) => {
     const isFirstUser = (await crmDB.countUsers()) === 0;
     const id = isFirstUser ? LEGACY_TENANT : crypto.randomUUID();
     const passwordHash = await hashPassword(password);
-    const user = await crmDB.createUser({ id, email, passwordHash, displayName });
+    const expiresAt = isFirstUser ? null : (Date.now() + 7 * 24 * 60 * 60 * 1000); // 7-day default trial for self-registration
+    const user = await crmDB.createUser({
+      id,
+      email,
+      passwordHash,
+      displayName,
+      isAdmin: isFirstUser,
+      status: "active",
+      expiresAt,
+    });
 
     const token = signToken(user);
     setSessionCookie(res, user);
@@ -107,7 +116,14 @@ authRouter.post("/register", async (req, res) => {
       success: true,
       token,
       isFirstUser,
-      user: { id: user.id, email: user.email, displayName: user.displayName },
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        isAdmin: !!user.isAdmin,
+        status: user.status,
+        expiresAt: user.expiresAt,
+      },
     });
   } catch (err) {
     console.error("[Auth] register error:", err);
@@ -132,12 +148,40 @@ authRouter.post("/login", async (req, res) => {
     const ok = await verifyPassword(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "بيانات الدخول غير صحيحة." });
 
+    const isAdmin = !!user.is_admin;
+    const isSuspended = user.status === "suspended";
+    const expiresAt = user.expires_at ? Number(user.expires_at) : null;
+    const isExpired = !isAdmin && expiresAt && Date.now() > expiresAt;
+
+    if (isSuspended) {
+      return res.status(403).json({
+        error: "تم إيقاف هذا الحساب مؤقتاً من قبل الإدارة. يرجى التواصل مع المسؤول.",
+        code: "ACCOUNT_SUSPENDED",
+      });
+    }
+
+    if (isExpired) {
+      return res.status(403).json({
+        error: "انتهت فترة اشتراك حسابك في واتساب برو. يرجى التواصل مع الإدارة للتجديد.",
+        code: "SUBSCRIPTION_EXPIRED",
+        expiresAt,
+      });
+    }
+
     const token = signToken(user);
     setSessionCookie(res, user);
     res.json({
       success: true,
       token,
-      user: { id: user.id, email: user.email, displayName: user.display_name },
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        isAdmin,
+        status: user.status || "active",
+        expiresAt,
+        phone: user.phone || null,
+      },
     });
   } catch (err) {
     console.error("[Auth] login error:", err);
@@ -160,7 +204,26 @@ authRouter.get("/me", async (req, res) => {
     if (!payload || !payload.uid) return res.status(401).json({ error: "not signed in" });
     const user = await crmDB.getUserById(payload.uid);
     if (!user) return res.status(401).json({ error: "not signed in" });
-    res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name } });
+
+    const isAdmin = !!user.is_admin;
+    const isSuspended = user.status === "suspended";
+    const expiresAt = user.expires_at ? Number(user.expires_at) : null;
+    const isExpired = !isAdmin && expiresAt && Date.now() > expiresAt;
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        isAdmin,
+        status: user.status || "active",
+        isSuspended,
+        isExpired,
+        expiresAt,
+        phone: user.phone || null,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -171,18 +234,47 @@ app.use("/api/auth", authRouter);
 // Everything else under /api requires a signed-in account, and runs
 // with that account's tenant context active for every database call
 // made anywhere during the request (see tenant.js).
-function requireAuth(req, res, next) {
-  let token = req.cookies?.[COOKIE_NAME];
-  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
-    token = req.headers.authorization.slice(7).trim();
+async function requireAuth(req, res, next) {
+  try {
+    let token = req.cookies?.[COOKIE_NAME];
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+      token = req.headers.authorization.slice(7).trim();
+    }
+    const payload = token && verifyToken(token);
+    if (!payload || !payload.uid) {
+      return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول." });
+    }
+
+    const user = await crmDB.getUserById(payload.uid);
+    if (!user) {
+      return res.status(401).json({ error: "الحساب غير موجود." });
+    }
+
+    const isAdmin = !!user.is_admin;
+    if (!isAdmin) {
+      if (user.status === "suspended") {
+        return res.status(403).json({
+          error: "تم إيقاف هذا الحساب مؤقتاً من قبل الإدارة. يرجى مراجعة المسؤول.",
+          code: "ACCOUNT_SUSPENDED",
+        });
+      }
+      if (user.expires_at && Date.now() > Number(user.expires_at)) {
+        return res.status(403).json({
+          error: "انتهت فترة اشتراك حسابك في واتساب برو. يرجى التواصل مع الإدارة لتجديد التفعيل.",
+          code: "SUBSCRIPTION_EXPIRED",
+          expiresAt: Number(user.expires_at),
+        });
+      }
+    }
+
+    req.userId = payload.uid;
+    req.userEmail = payload.email;
+    req.user = user;
+    req.isAdmin = isAdmin;
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-  const payload = token && verifyToken(token);
-  if (!payload || !payload.uid) {
-    return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول." });
-  }
-  req.userId = payload.uid;
-  req.userEmail = payload.email;
-  next();
 }
 
 app.use("/api", requireAuth);
@@ -191,17 +283,238 @@ app.use("/api", (req, res, next) => {
 });
 
 // ==========================================================
+// Super Admin & SaaS Subscription Management API
+// ==========================================================
+const adminRouter = express.Router();
+
+function requireAdmin(req, res, next) {
+  if (!req.isAdmin) {
+    return res.status(403).json({ error: "غير مصرح - صلاحيات مدير النظام (Admin) مطلوبة." });
+  }
+  next();
+}
+
+adminRouter.use(requireAdmin);
+
+// 1. List all platform users with statistics
+adminRouter.get("/users", async (req, res) => {
+  try {
+    const rawUsers = await crmDB.getAllUsers();
+    const now = Date.now();
+
+    let totalUsers = rawUsers.length;
+    let activeSubscriptions = 0;
+    let expiredSubscriptions = 0;
+    let suspendedSubscriptions = 0;
+
+    const users = rawUsers.map((u) => {
+      const isAdmin = !!u.is_admin;
+      const isSuspended = u.status === "suspended";
+      const expiresAt = u.expires_at ? Number(u.expires_at) : null;
+      const isExpired = !isAdmin && expiresAt && now > expiresAt;
+
+      let computedStatus = u.status || "active";
+      if (isSuspended) {
+        computedStatus = "suspended";
+        suspendedSubscriptions++;
+      } else if (isExpired) {
+        computedStatus = "expired";
+        expiredSubscriptions++;
+      } else {
+        computedStatus = "active";
+        activeSubscriptions++;
+      }
+
+      const daysRemaining = expiresAt
+        ? Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24))
+        : null;
+
+      return {
+        id: u.id,
+        email: u.email,
+        displayName: u.display_name || "",
+        phone: u.phone || "",
+        isAdmin,
+        status: computedStatus,
+        rawStatus: u.status || "active",
+        expiresAt,
+        daysRemaining,
+        notes: u.notes || "",
+        createdAt: u.created_at ? Number(u.created_at) : null,
+      };
+    });
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers,
+        activeSubscriptions,
+        expiredSubscriptions,
+        suspendedSubscriptions,
+      },
+      users,
+    });
+  } catch (err) {
+    console.error("[Admin] GET /users error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Create a new client account
+adminRouter.post("/users", async (req, res) => {
+  try {
+    let { email, password, displayName, phone, durationDays, expiresAt, notes, isAdmin } = req.body || {};
+    email = String(email || "").trim();
+    if (!email) {
+      return res.status(400).json({ error: "البريد الإلكتروني أو رقم الهاتف مطلوب." });
+    }
+    if (/^\+?\d{8,15}$/.test(email)) {
+      if (!phone) phone = email;
+      email = `${email.replace(/\D/g, "")}@whatsapp.pro`;
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "بريد إلكتروني أو رقم هاتف غير صالح." });
+    }
+    if (!password || String(password).length < 6) {
+      return res.status(400).json({ error: "كلمة المرور يجب ألا تقل عن 6 أحرف." });
+    }
+
+    const existing = await crmDB.getUserByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: "يوجد حساب مسجل بالفعل بهذا البريد أو الرقم." });
+    }
+
+    let finalExpiresAt = null;
+    if (expiresAt) {
+      finalExpiresAt = Number(expiresAt);
+    } else if (durationDays && Number(durationDays) > 0) {
+      finalExpiresAt = Date.now() + Number(durationDays) * 24 * 60 * 60 * 1000;
+    }
+
+    const id = crypto.randomUUID();
+    const passwordHash = await hashPassword(password);
+    const user = await crmDB.createUser({
+      id,
+      email,
+      passwordHash,
+      displayName: displayName || (phone ? `عميل (${phone})` : email),
+      isAdmin: !!isAdmin,
+      status: "active",
+      expiresAt: finalExpiresAt,
+      phone: phone || null,
+      notes: notes || null,
+    });
+
+    res.json({
+      success: true,
+      message: "تم إنشاء حساب العميل بنجاح.",
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        phone: user.phone,
+        isAdmin: user.isAdmin,
+        status: user.status,
+        expiresAt: user.expiresAt,
+      },
+    });
+  } catch (err) {
+    console.error("[Admin] POST /users error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Update client details, status, notes, or expiration
+adminRouter.patch("/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { displayName, phone, notes, status, expiresAt, password } = req.body;
+
+    const updates = {};
+    if (displayName !== undefined) updates.displayName = displayName;
+    if (phone !== undefined) updates.phone = phone;
+    if (notes !== undefined) updates.notes = notes;
+    if (status !== undefined) updates.status = status;
+    if (expiresAt !== undefined) updates.expiresAt = expiresAt ? Number(expiresAt) : null;
+    if (password && String(password).length >= 6) {
+      updates.passwordHash = await hashPassword(password);
+    }
+
+    const updated = await crmDB.updateUser(id, updates);
+    res.json({ success: true, message: "تم تحديث بيانات الحساب بنجاح.", user: updated });
+  } catch (err) {
+    console.error("[Admin] PATCH /users/:id error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Quick renew subscription (add N days)
+adminRouter.post("/users/:id/renew", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const days = Number(req.body.days || 30);
+    if (days <= 0) {
+      return res.status(400).json({ error: "عدد الأيام غير صالح." });
+    }
+
+    const updated = await crmDB.renewUser(id, days);
+    res.json({
+      success: true,
+      message: `تم تمديد الاشتراك بنجاح لمدة ${days} يوم.`,
+      user: updated,
+    });
+  } catch (err) {
+    console.error("[Admin] POST /users/:id/renew error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Delete client account
+adminRouter.delete("/users/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id === req.userId) {
+      return res.status(400).json({ error: "لا يمكنك حذف حسابك الحالي." });
+    }
+    if (id === LEGACY_TENANT) {
+      return res.status(400).json({ error: "لا يمكن حذف الحساب الأساسي للنظام." });
+    }
+
+    await crmDB.deleteUser(id);
+    res.json({ success: true, message: "تم حذف الحساب بنجاح." });
+  } catch (err) {
+    console.error("[Admin] DELETE /users/:id error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use("/api/admin", adminRouter);
+
+// ==========================================================
 // Socket.io - authenticate via session cookie or token, then
 // join a private per-account room so events never cross accounts.
 // ==========================================================
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const raw = socket.handshake.headers.cookie || "";
     const parsed = cookie.parse(raw);
     const token = parsed[COOKIE_NAME] || socket.handshake.auth?.token || socket.handshake.query?.token;
     const payload = token && verifyToken(token);
     if (!payload || !payload.uid) return next(new Error("unauthorized"));
+
+    const user = await crmDB.getUserById(payload.uid);
+    if (!user) return next(new Error("unauthorized"));
+
+    const isAdmin = !!user.is_admin;
+    if (!isAdmin) {
+      if (user.status === "suspended") return next(new Error("account_suspended"));
+      if (user.expires_at && Date.now() > Number(user.expires_at)) {
+        return next(new Error("subscription_expired"));
+      }
+    }
+
     socket.userId = payload.uid;
+    socket.isAdmin = isAdmin;
     next();
   } catch (e) {
     next(new Error("unauthorized"));

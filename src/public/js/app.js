@@ -3124,16 +3124,31 @@
   function checkAuthAndBoot() {
     fetch("/api/auth/me", { credentials: "include" }).then(function (r) {
       if (r.status === 401) { showAuthOverlay("login"); return null; }
+      if (r.status === 403) {
+        return r.json().then(function (errD) {
+          showAuthOverlay("login");
+          authErr(errD.error || "انتهت فترة اشتراكك في واتساب برو.");
+          return null;
+        });
+      }
       return r.json();
     }).then(function (d) {
       if (!d || !d.success) return;
+      if (d.user && (d.user.isExpired || d.user.isSuspended)) {
+        showAuthOverlay("login");
+        authErr(d.user.isSuspended ? "تم إيقاف حسابك مؤقتاً من قبل الإدارة." : "انتهت فترة اشتراك حسابك. يرجى التواصل مع الإدارة للتجديد.");
+        return;
+      }
       S.account = d.user;
       var emailEl = document.getElementById("accountEmail");
       if (emailEl) emailEl.textContent = d.user.email;
+      if (d.user.isAdmin) {
+        var navAdmin = document.getElementById("navAdmin");
+        if (navAdmin) navAdmin.classList.remove("hidden");
+      }
       hideAuthOverlay();
       boot();
     }).catch(function () {
-      // مفيش اتصال بالسيرفر - جرّب توصل بيانات الأوفلاين لو موجودة، وإلا سيب شاشة الدخول
       showAuthOverlay("login");
     });
   }
