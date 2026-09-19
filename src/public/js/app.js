@@ -2525,6 +2525,7 @@
       '<div class="field">' +
         '<label>مدة صلاحية الاشتراك</label>' +
         '<div class="admin-presets-grid" id="admPresetsWrap">' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "1" ? " active" : "") + '" data-admpreset="1">⚡ يوم تجريبي (24 ساعة)</button>' +
           '<button type="button" class="admin-preset-btn' + (currentDays === "30" ? " active" : "") + '" data-admpreset="30">📅 شهر (30 يوم)</button>' +
           '<button type="button" class="admin-preset-btn' + (currentDays === "90" ? " active" : "") + '" data-admpreset="90">📅 3 شهور (90 يوم)</button>' +
           '<button type="button" class="admin-preset-btn' + (currentDays === "180" ? " active" : "") + '" data-admpreset="180">📅 6 شهور (180 يوم)</button>' +
