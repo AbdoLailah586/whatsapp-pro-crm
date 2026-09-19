@@ -20,6 +20,7 @@ const { tenantContext, LEGACY_TENANT } = require("./tenant");
 const {
   hashPassword,
   verifyPassword,
+  signToken,
   setSessionCookie,
   clearSessionCookie,
   verifyToken,
