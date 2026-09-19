@@ -906,3 +906,40 @@ table.data select { font-size: var(--fs-xs); padding: 4px 8px; width: auto; min-
   .panel { scroll-snap-align: start; width: 88vw !important; flex: none !important; min-width: 0 !important; }
   .panel[data-role="full"] { width: 100vw !important; }
 }
+
+/* ============================ 17 · SUPER ADMIN PANEL ============================ */
+.admin-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+@media (max-width: 500px) {
+  .admin-presets-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.admin-preset-btn {
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: var(--r-2);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+  transition: all var(--t-1) var(--e-out);
+  text-align: center;
+}
+.admin-preset-btn:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+}
+.admin-preset-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+

@@ -49,7 +49,11 @@
     uploadedJsonFile: null,
     uploadedJsonNormalized: [],
     uploadedJsonFiltered: [],
-    account: null
+    account: null,
+    adminUsers: [],
+    adminStats: null,
+    adminFilter: "all",
+    adminSearch: ""
   };
 
   var TAGS = {
@@ -179,6 +183,15 @@
       if (r.status === 401) {
         showAuthOverlay();
         return Promise.reject(new Error("غير مسجّل الدخول"));
+      }
+      if (r.status === 403) {
+        return r.json().then(function (errD) {
+          if (errD && (errD.code === "SUBSCRIPTION_EXPIRED" || errD.code === "ACCOUNT_SUSPENDED")) {
+            showAuthOverlay("login");
+            authErr(errD.error || "انتهت فترة اشتراكك في واتساب برو CRM.", true);
+          }
+          return Promise.reject(new Error((errD && errD.error) || "غير مصرح"));
+        });
       }
       return r.json();
     });
@@ -2280,6 +2293,357 @@
   }
 
   /* ======================================================================
+     12ج · Super Admin — إدارة المشتركين والعملاء
+     ====================================================================== */
+
+  function adminPanel() {
+    return {
+      id: "admin", role: "full", title: "إدارة المشتركين", crumb: "إدارة المشتركين",
+      render: function () {
+        var s = S.adminStats || { totalUsers: 0, activeSubscriptions: 0, expiredSubscriptions: 0, suspendedSubscriptions: 0 };
+        return '' +
+          '<div class="panel-head">' +
+            '<div>' +
+              '<h3 style="display:flex;align-items:center;gap:8px;">' +
+                '<i class="fa-solid fa-crown" style="color:#eab308;"></i> إدارة المشتركين والعملاء (Super Admin)' +
+              '</h3>' +
+              '<span class="sub">لوحة تحكم وتفعيل وتجديد اشتراكات عملاء واتساب برو CRM</span>' +
+            '</div>' +
+            '<div class="actions">' +
+              '<button class="btn btn-sm" data-act="refresh-admin-users"><i class="fa-solid fa-rotate"></i> تحديث</button>' +
+              '<button class="btn btn-sm btn-primary" data-act="new-client"><i class="fa-solid fa-user-plus"></i> إضافة عميل جديد</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="panel-body pad">' +
+            '<div class="bento" style="padding:0;margin-bottom:16px;">' +
+              '<div class="tile">' +
+                '<div class="tile-head"><h4>👥 إجمالي الحسابات</h4></div>' +
+                '<div class="tile-num" id="adminStatTotal">' + (s.totalUsers || 0) + '</div>' +
+                '<div class="tile-delta">كل العملاء المسجلين</div>' +
+              '</div>' +
+              '<div class="tile">' +
+                '<div class="tile-head"><h4 style="color:var(--ok);">🟢 اشتراكات نشطة</h4></div>' +
+                '<div class="tile-num" id="adminStatActive" style="color:var(--ok);">' + (s.activeSubscriptions || 0) + '</div>' +
+                '<div class="tile-delta up">تعمل بصلاحية سارية</div>' +
+              '</div>' +
+              '<div class="tile">' +
+                '<div class="tile-head"><h4 style="color:var(--danger);">🔴 اشتراكات منتهية</h4></div>' +
+                '<div class="tile-num" id="adminStatExpired" style="color:var(--danger);">' + (s.expiredSubscriptions || 0) + '</div>' +
+                '<div class="tile-delta" style="color:var(--danger);">تتطلب تجديد الصلاحية</div>' +
+              '</div>' +
+              '<div class="tile">' +
+                '<div class="tile-head"><h4 style="color:var(--warn);">⏸️ حسابات معلقة</h4></div>' +
+                '<div class="tile-num" id="adminStatSuspended" style="color:var(--warn);">' + (s.suspendedSubscriptions || 0) + '</div>' +
+                '<div class="tile-delta" style="color:var(--warn);">موقوفة بقرار الإدارة</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
+              '<div style="flex:1;min-width:240px;position:relative;">' +
+                '<input type="search" id="adminSearchInput" value="' + esc(S.adminSearch || "") + '" placeholder="بحث برقم الهاتف أو اسم العميل أو البريد..." style="width:100%;">' +
+              '</div>' +
+              '<div class="seg" id="adminFilterSeg">' +
+                '<button data-admin-filter="all" aria-pressed="' + (S.adminFilter === "all") + '">الكل (' + (s.totalUsers || 0) + ')</button>' +
+                '<button data-admin-filter="active" aria-pressed="' + (S.adminFilter === "active") + '">🟢 نشط (' + (s.activeSubscriptions || 0) + ')</button>' +
+                '<button data-admin-filter="expired" aria-pressed="' + (S.adminFilter === "expired") + '">🔴 منتهي (' + (s.expiredSubscriptions || 0) + ')</button>' +
+                '<button data-admin-filter="suspended" aria-pressed="' + (S.adminFilter === "suspended") + '">⏸️ معلق (' + (s.suspendedSubscriptions || 0) + ')</button>' +
+              '</div>' +
+            '</div>' +
+            '<div id="adminUsersTableWrap">' +
+              adminUsersTableHtml() +
+            '</div>' +
+          '</div>';
+      },
+      mount: function (el) {
+        var searchInp = el.querySelector("#adminSearchInput");
+        if (searchInp) {
+          searchInp.addEventListener("input", function (e) {
+            S.adminSearch = e.target.value;
+            renderAdminUsersList();
+          });
+        }
+      }
+    };
+  }
+
+  function fetchAdminUsers() {
+    return api("/api/admin/users").then(function (d) {
+      if (!d || !d.success) return;
+      S.adminUsers = d.users || [];
+      S.adminStats = d.stats || {
+        totalUsers: 0,
+        activeSubscriptions: 0,
+        expiredSubscriptions: 0,
+        suspendedSubscriptions: 0
+      };
+      updateAdminStatsUI();
+      renderAdminUsersList();
+    }).catch(function (err) {
+      toast("تعذر جلب قائمة المشتركين: " + err.message, "danger");
+    });
+  }
+
+  function updateAdminStatsUI() {
+    var s = S.adminStats;
+    if (!s) return;
+    var elTotal = $("adminStatTotal");
+    var elActive = $("adminStatActive");
+    var elExpired = $("adminStatExpired");
+    var elSuspended = $("adminStatSuspended");
+    if (elTotal) elTotal.textContent = s.totalUsers || 0;
+    if (elActive) elActive.textContent = s.activeSubscriptions || 0;
+    if (elExpired) elExpired.textContent = s.expiredSubscriptions || 0;
+    if (elSuspended) elSuspended.textContent = s.suspendedSubscriptions || 0;
+
+    var seg = $("adminFilterSeg");
+    if (seg) {
+      var bAll = seg.querySelector('[data-admin-filter="all"]');
+      var bAct = seg.querySelector('[data-admin-filter="active"]');
+      var bExp = seg.querySelector('[data-admin-filter="expired"]');
+      var bSus = seg.querySelector('[data-admin-filter="suspended"]');
+      if (bAll) bAll.textContent = "الكل (" + (s.totalUsers || 0) + ")";
+      if (bAct) bAct.textContent = "🟢 نشط (" + (s.activeSubscriptions || 0) + ")";
+      if (bExp) bExp.textContent = "🔴 منتهي (" + (s.expiredSubscriptions || 0) + ")";
+      if (bSus) bSus.textContent = "⏸️ معلق (" + (s.suspendedSubscriptions || 0) + ")";
+    }
+  }
+
+  function renderAdminUsersList() {
+    var wrap = $("adminUsersTableWrap");
+    if (wrap) wrap.innerHTML = adminUsersTableHtml();
+  }
+
+  function adminUsersTableHtml() {
+    if (!S.adminUsers || !S.adminUsers.length) {
+      return '<div class="empty"><i class="fa-solid fa-users"></i><p><strong>لا يوجد مشتركون حالياً</strong>جاري التحميل أو لا يوجد عملاء مسجلين.</p></div>';
+    }
+
+    var q = (S.adminSearch || "").trim().toLowerCase();
+    var filter = S.adminFilter || "all";
+
+    var filtered = S.adminUsers.filter(function (u) {
+      if (filter === "active" && (u.isAdmin || u.status !== "active")) return false;
+      if (filter === "expired" && (u.isAdmin || u.status !== "expired")) return false;
+      if (filter === "suspended" && u.status !== "suspended") return false;
+
+      if (q) {
+        var str = (u.email + " " + (u.displayName || "") + " " + (u.phone || "") + " " + (u.notes || "")).toLowerCase();
+        if (str.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    if (!filtered.length) {
+      return '<div class="empty"><i class="fa-solid fa-filter"></i><p><strong>لا توجد نتائج مطابقة للبحث أو التصفية</strong></p></div>';
+    }
+
+    var rows = filtered.map(function (u) {
+      var cleanPhone = (u.phone || u.email || "").replace(/\D/g, "");
+      var statusBadge = "";
+      if (u.isAdmin) {
+        statusBadge = '<span class="tag" style="background:var(--ai-soft);color:var(--ai);font-weight:700;"><i class="fa-solid fa-crown"></i> مسؤول</span>';
+      } else if (u.status === "suspended") {
+        statusBadge = '<span class="tag" style="background:var(--warn-soft);color:var(--warn);font-weight:700;"><i class="fa-solid fa-pause"></i> معلق</span>';
+      } else if (u.status === "expired") {
+        statusBadge = '<span class="tag" style="background:var(--danger-soft);color:var(--danger);font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> منتهي</span>';
+      } else {
+        statusBadge = '<span class="tag" style="background:var(--ok-soft);color:var(--ok);font-weight:700;"><i class="fa-solid fa-circle-check"></i> نشط</span>';
+      }
+
+      var expiryHtml = "";
+      if (u.isAdmin || !u.expiresAt) {
+        expiryHtml = '<div><strong>دائم (غير محدد)</strong></div><div class="sub" style="font-size:10.5px;color:var(--faint);">صلاحية غير محدودة</div>';
+      } else {
+        var expDateStr = new Date(u.expiresAt).toISOString().split("T")[0];
+        var rem = u.daysRemaining;
+        var remBadge = rem > 0
+          ? '<span class="tag" style="background:var(--ok-soft);color:var(--ok);font-size:10.5px;">باقي ' + rem + ' يوم</span>'
+          : '<span class="tag" style="background:var(--danger-soft);color:var(--danger);font-size:10.5px;">منتهي منذ ' + Math.abs(rem) + ' يوم</span>';
+        expiryHtml = '<div><strong class="mono" dir="ltr">' + esc(expDateStr) + '</strong></div><div style="margin-top:2px;">' + remBadge + '</div>';
+      }
+
+      var phoneLink = cleanPhone ? ('<a href="https://wa.me/' + cleanPhone + '" target="_blank" rel="noopener" class="btn btn-sm" style="color:var(--ok);gap:5px;" title="فتح محادثة واتساب"><i class="fa-brands fa-whatsapp"></i> <span dir="ltr">' + esc(u.phone || cleanPhone) + '</span></a>') : '<span class="faint">—</span>';
+
+      var isMe = S.account && S.account.id === u.id;
+      var isLegacy = u.id === "legacy";
+
+      var actionsHtml = '<div style="display:flex;gap:4px;align-items:center;">';
+      if (!u.isAdmin) {
+        actionsHtml += '<button class="btn btn-sm" data-admin-renew="' + esc(u.id) + '" title="تجديد شهر إضافي (+30 يوم)"><i class="fa-solid fa-rotate"></i> +30يوم</button>';
+        actionsHtml += '<button class="btn btn-sm" data-admin-toggle-suspend="' + esc(u.id) + '" data-current-status="' + esc(u.status) + '" title="' + (u.status === "suspended" ? "تنشيط الحساب" : "إيقاف الحساب مؤقتاً") + '" style="' + (u.status === "suspended" ? "color:var(--ok);" : "color:var(--warn);") + '"><i class="fa-solid ' + (u.status === "suspended" ? "fa-play" : "fa-pause") + '"></i></button>';
+      }
+      actionsHtml += '<button class="btn btn-sm" data-admin-edit="' + esc(u.id) + '" title="تعديل بيانات الحساب"><i class="fa-solid fa-pen"></i></button>';
+      if (!isMe && !isLegacy) {
+        actionsHtml += '<button class="btn btn-sm btn-danger" data-admin-delete="' + esc(u.id) + '" title="حذف الحساب"><i class="fa-solid fa-trash"></i></button>';
+      }
+      actionsHtml += '</div>';
+
+      return '<tr>' +
+        '<td>' +
+          '<div style="display:flex;align-items:center;gap:6px;">' +
+            '<strong>' + esc(u.displayName || "عميل") + '</strong>' +
+          '</div>' +
+          '<div class="sub mono" style="font-size:11px;color:var(--muted);">' + esc(u.email) + '</div>' +
+        '</td>' +
+        '<td>' + phoneLink + '</td>' +
+        '<td>' + statusBadge + '</td>' +
+        '<td>' + expiryHtml + '</td>' +
+        '<td>' + (u.notes ? ('<span style="font-size:11.5px;color:var(--ink-2);max-width:180px;display:inline-block;white-space:normal;">' + esc(u.notes) + '</span>') : '<span class="faint">—</span>') + '</td>' +
+        '<td>' + actionsHtml + '</td>' +
+      '</tr>';
+    }).join("");
+
+    return '<div class="table-wrap"><table class="data"><thead><tr>' +
+      '<th>العميل</th>' +
+      '<th>رقم الواتساب</th>' +
+      '<th>الحالة</th>' +
+      '<th>تاريخ الانتهاء</th>' +
+      '<th>ملاحظات</th>' +
+      '<th>إجراءات</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function openNewClientSheet(userToEdit) {
+    var isEdit = !!userToEdit;
+    var currentExpiresAt = userToEdit && userToEdit.expiresAt ? new Date(userToEdit.expiresAt).toISOString().split("T")[0] : "";
+    var currentDays = isEdit && !userToEdit.expiresAt ? "lifetime" : "30";
+
+    var bodyHtml = '' +
+      '<div class="field">' +
+        '<label>رقم هاتف العميل (أو البريد الإلكتروني) *</label>' +
+        '<input type="text" id="admPhone" dir="ltr" placeholder="01554826209 أو client@domain.com" value="' + esc(userToEdit ? (userToEdit.phone || userToEdit.email) : "") + '" ' + (isEdit ? "disabled" : "required") + '>' +
+        '<span style="font-size:11px;color:var(--muted);">يُستخدم كرقم دخول أساسي للموقع وتطبيق الموبايل</span>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>اسم العميل / اسم المتجر</label>' +
+        '<input type="text" id="admDisplayName" placeholder="مثال: متجر السعادة - أحمد محمد" value="' + esc(userToEdit ? (userToEdit.displayName || "") : "") + '">' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>' + (isEdit ? "تغيير كلمة المرور (اختياري)" : "كلمة المرور *") + '</label>' +
+        '<input type="password" id="admPassword" dir="ltr" placeholder="••••••••" minlength="6">' +
+        (isEdit ? '<span style="font-size:11px;color:var(--muted);">اتركها فارغة إذا لا ترغب في تغيير كلمة المرور الحالية</span>' : "") +
+      '</div>' +
+      '<div class="field">' +
+        '<label>مدة صلاحية الاشتراك</label>' +
+        '<div class="admin-presets-grid" id="admPresetsWrap">' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "30" ? " active" : "") + '" data-admpreset="30">📅 شهر (30 يوم)</button>' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "90" ? " active" : "") + '" data-admpreset="90">📅 3 شهور (90 يوم)</button>' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "180" ? " active" : "") + '" data-admpreset="180">📅 6 شهور (180 يوم)</button>' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "365" ? " active" : "") + '" data-admpreset="365">📅 سنة (365 يوم)</button>' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "lifetime" ? " active" : "") + '" data-admpreset="lifetime">♾️ دائم (بدون انتهاء)</button>' +
+          '<button type="button" class="admin-preset-btn' + (currentDays === "custom" ? " active" : "") + '" data-admpreset="custom">⚙️ تاريخ يدوي</button>' +
+        '</div>' +
+        '<div id="admCustomDateBox" class="' + (currentDays === "custom" ? "" : "hidden") + '" style="margin-top:6px;">' +
+          '<input type="date" id="admCustomDate" value="' + currentExpiresAt + '">' +
+        '</div>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>حالة الحساب</label>' +
+        '<select id="admStatus">' +
+          '<option value="active"' + (userToEdit && userToEdit.rawStatus === "suspended" ? "" : " selected") + '>🟢 نشط (يعمل)</option>' +
+          '<option value="suspended"' + (userToEdit && userToEdit.rawStatus === "suspended" ? " selected" : "") + '>⏸️ موقوف مؤقتاً (معلق)</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>ملاحظات خاصة بالإدارة</label>' +
+        '<textarea id="admNotes" rows="2" placeholder="ملاحظات الاشتراك، قيمة الباقة، تاريخ الدفع...">' + esc(userToEdit ? (userToEdit.notes || "") : "") + '</textarea>' +
+      '</div>';
+
+    var selectedPreset = currentDays;
+
+    openSheet({
+      title: isEdit ? "تعديل بيانات العميل" : "إضافة عميل جديد",
+      body: bodyHtml,
+      foot: '<button class="btn" data-x="no">إلغاء</button><button class="btn btn-primary" data-x="yes">' + (isEdit ? "حفظ التعديلات" : "إضافة العميل وتفعيل الحساب") + '</button>',
+      mount: function (el) {
+        var presets = el.querySelectorAll("[data-admpreset]");
+        var customBox = el.querySelector("#admCustomDateBox");
+        presets.forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            presets.forEach(function (b) { b.classList.remove("active"); });
+            btn.classList.add("active");
+            selectedPreset = btn.getAttribute("data-admpreset");
+            if (selectedPreset === "custom") {
+              customBox.classList.remove("hidden");
+            } else {
+              customBox.classList.add("hidden");
+            }
+          });
+        });
+      },
+      onFoot: function (act) {
+        if (act !== "yes") return closeSheet();
+        var phone = $("admPhone").value.trim();
+        var displayName = $("admDisplayName").value.trim();
+        var password = $("admPassword").value.trim();
+        var status = $("admStatus").value;
+        var notes = $("admNotes").value.trim();
+
+        if (!isEdit && !phone) return toast("رقم الهاتف أو البريد الإلكتروني مطلوب.", "warn");
+        if (!isEdit && (!password || password.length < 6)) return toast("كلمة المرور يجب ألا تقل عن 6 أحرف.", "warn");
+        if (isEdit && password && password.length < 6) return toast("كلمة المرور يجب ألا تقل عن 6 أحرف.", "warn");
+
+        var payload = {
+          displayName: displayName,
+          notes: notes,
+          status: status
+        };
+
+        if (password) payload.password = password;
+
+        if (selectedPreset === "lifetime") {
+          payload.expiresAt = null;
+          payload.durationDays = 0;
+        } else if (selectedPreset === "custom") {
+          var customDateVal = $("admCustomDate").value;
+          if (customDateVal) {
+            payload.expiresAt = new Date(customDateVal + "T23:59:59").getTime();
+          } else {
+            return toast("يرجى اختيار التاريخ المخصص.", "warn");
+          }
+        } else {
+          payload.durationDays = Number(selectedPreset);
+        }
+
+        if (isEdit) {
+          api("/api/admin/users/" + encodeURIComponent(userToEdit.id), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }).then(function (d) {
+            if (d && d.success) {
+              closeSheet(true);
+              toast("تم تحديث بيانات العميل بنجاح", "ok");
+              fetchAdminUsers();
+            } else {
+              toast((d && d.error) || "فشل التحديث", "danger");
+            }
+          }).catch(function (err) {
+            toast(err.message, "danger");
+          });
+        } else {
+          payload.email = phone;
+          payload.phone = phone;
+          api("/api/admin/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }).then(function (d) {
+            if (d && d.success) {
+              closeSheet(true);
+              toast("تمت إضافة وتفعيل حساب العميل بنجاح!", "ok");
+              fetchAdminUsers();
+            } else {
+              toast((d && d.error) || "فشل إضافة العميل", "danger");
+            }
+          }).catch(function (err) {
+            toast(err.message, "danger");
+          });
+        }
+      }
+    });
+  }
+
+  /* ======================================================================
      13 · CORE — لوحة الأوامر
      ====================================================================== */
 
@@ -2294,6 +2658,7 @@
     { icon: "fa-wand-magic-sparkles", label: "الأتمتة", hint: "شاشة", run: function () { go("rules"); } },
     { icon: "fa-sliders",    label: "الإعدادات",        hint: "شاشة", run: function () { go("settings"); } },
     { icon: "fa-file-export", label: "تصدير جهات الاتصال والمجموعات", hint: "شاشة", run: function () { go("export"); } },
+    { icon: "fa-users-gear", label: "إدارة المشتركين (Admin)", hint: "شاشة", run: function () { go("admin"); } },
     { icon: "fa-plus",       label: "تسجيل طلب جديد",   hint: "أمر", run: newOrderSheet },
     { icon: "fa-calendar-plus", label: "حجز موعد جديد", hint: "أمر", run: newBookingSheet },
     { icon: "fa-wand-magic-sparkles", label: "قاعدة ردّ جديدة", hint: "أمر", run: newRuleSheet },
@@ -2408,6 +2773,9 @@
         });
       } else if (view === "export") {
         replaceStack([exportPanel()]);
+      } else if (view === "admin") {
+        replaceStack([adminPanel()]);
+        fetchAdminUsers();
       }
     });
   }
@@ -2571,6 +2939,89 @@
     var ts = t.closest("[data-theme-set]");
     if (ts) { setTheme(ts.getAttribute("data-theme-set")); return; }
 
+    /* فلترة وإجراءات إدارة المشتركين (Admin) */
+    var af = t.closest("[data-admin-filter]");
+    if (af) {
+      S.adminFilter = af.getAttribute("data-admin-filter");
+      document.querySelectorAll("[data-admin-filter]").forEach(function (c) {
+        c.setAttribute("aria-pressed", String(c.getAttribute("data-admin-filter") === S.adminFilter));
+      });
+      renderAdminUsersList();
+      return;
+    }
+
+    var ar = t.closest("[data-admin-renew]");
+    if (ar) {
+      var renewId = ar.getAttribute("data-admin-renew");
+      confirmAsk("تمديد اشتراك هذا العميل لمدة 30 يوم إضافية؟", "تجديد +30 يوم", "primary").then(function (ok) {
+        if (!ok) return;
+        api("/api/admin/users/" + encodeURIComponent(renewId) + "/renew", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ days: 30 })
+        }).then(function (d) {
+          if (d && d.success) {
+            toast("تم تمديد الاشتراك بنجاح (+30 يوم)", "ok");
+            fetchAdminUsers();
+          } else {
+            toast((d && d.error) || "فشل التجديد", "danger");
+          }
+        }).catch(function (e) { toast(e.message, "danger"); });
+      });
+      return;
+    }
+
+    var as = t.closest("[data-admin-toggle-suspend]");
+    if (as) {
+      var suspId = as.getAttribute("data-admin-toggle-suspend");
+      var curSt = as.getAttribute("data-current-status");
+      var nextSt = curSt === "suspended" ? "active" : "suspended";
+      var askMsg = nextSt === "suspended"
+        ? "إيقاف حساب هذا العميل مؤقتاً؟ لن يتمكن من استخدام المنصة أو تسجيل الدخول حتى إعادة التفعيل."
+        : "تنشيط حساب هذا العميل والسماح له بالدخول؟";
+      confirmAsk(askMsg, nextSt === "suspended" ? "إيقاف الحساب" : "تنشيط الحساب", nextSt === "suspended" ? "danger" : "primary").then(function (ok) {
+        if (!ok) return;
+        api("/api/admin/users/" + encodeURIComponent(suspId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextSt })
+        }).then(function (d) {
+          if (d && d.success) {
+            toast(nextSt === "suspended" ? "تم إيقاف الحساب مؤقتاً" : "تم تنشيط الحساب بنجاح", "ok");
+            fetchAdminUsers();
+          } else {
+            toast((d && d.error) || "فشل تغيير الحالة", "danger");
+          }
+        }).catch(function (e) { toast(e.message, "danger"); });
+      });
+      return;
+    }
+
+    var ae = t.closest("[data-admin-edit]");
+    if (ae) {
+      var editId = ae.getAttribute("data-admin-edit");
+      var userObj = (S.adminUsers || []).find(function (u) { return String(u.id) === String(editId); });
+      if (userObj) openNewClientSheet(userObj);
+      return;
+    }
+
+    var ad = t.closest("[data-admin-delete]");
+    if (ad) {
+      var delId = ad.getAttribute("data-admin-delete");
+      confirmAsk("هل أنت متأكد من رغبتك في حذف هذا الحساب نهائياً؟ سيتم مسح جميع بيانات العميل وقواعده وسجلاته ولا يمكن التراجع.", "حذف الحساب نهائياً", "danger").then(function (ok) {
+        if (!ok) return;
+        api("/api/admin/users/" + encodeURIComponent(delId), { method: "DELETE" }).then(function (d) {
+          if (d && d.success) {
+            toast("تم حذف الحساب بنجاح", "ok");
+            fetchAdminUsers();
+          } else {
+            toast((d && d.error) || "فشل حذف الحساب", "danger");
+          }
+        }).catch(function (e) { toast(e.message, "danger"); });
+      });
+      return;
+    }
+
     /* أوامر مسمّاة */
     var act2 = t.closest("[data-act]");
     if (act2) { handleAction(act2.getAttribute("data-act"), act2); return; }
@@ -2603,6 +3054,8 @@
       case "exp-extract": doExtract(); break;
       case "exp-copy": copyExtractNumbers(); break;
       case "exp-save-preset": saveExtractAsPreset(); break;
+      case "new-client": openNewClientSheet(); break;
+      case "refresh-admin-users": fetchAdminUsers().then(function () { toast("تم تحديث قائمة المشتركين", "ok"); }); break;
     }
   }
 
@@ -3078,9 +3531,19 @@
     }
   }
 
-  function authErr(msg) {
+  function authErr(msg, isRenewal) {
     var err = document.getElementById("authError");
-    if (err) { err.textContent = msg; err.classList.remove("hidden"); }
+    if (err) {
+      if (isRenewal) {
+        err.innerHTML = '<div style="margin-bottom:8px;font-weight:600;">' + esc(msg) + '</div>' +
+          '<a href="https://wa.me/201554826209?text=' + encodeURIComponent("مرحباً، أود الاستفسار عن تجديد اشتراك حسابي في واتساب برو CRM") + '" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 16px;background:#25d366;color:#ffffff;border-radius:8px;font-weight:700;text-decoration:none;font-size:13px;box-shadow:0 2px 6px rgba(37,211,102,0.3);">' +
+            '<i class="fa-brands fa-whatsapp" style="font-size:17px;"></i> تواصل مع الإدارة للتجديد: 01554826209' +
+          '</a>';
+      } else {
+        err.textContent = msg;
+      }
+      err.classList.remove("hidden");
+    }
   }
 
   document.addEventListener("submit", function (e) {
@@ -3127,7 +3590,7 @@
       if (r.status === 403) {
         return r.json().then(function (errD) {
           showAuthOverlay("login");
-          authErr(errD.error || "انتهت فترة اشتراكك في واتساب برو.");
+          authErr((errD && errD.error) || "انتهت فترة اشتراكك في واتساب برو CRM.", true);
           return null;
         });
       }
@@ -3136,7 +3599,7 @@
       if (!d || !d.success) return;
       if (d.user && (d.user.isExpired || d.user.isSuspended)) {
         showAuthOverlay("login");
-        authErr(d.user.isSuspended ? "تم إيقاف حسابك مؤقتاً من قبل الإدارة." : "انتهت فترة اشتراك حسابك. يرجى التواصل مع الإدارة للتجديد.");
+        authErr(d.user.isSuspended ? "تم إيقاف حسابك مؤقتاً من قبل الإدارة." : "انتهت فترة اشتراك حسابك في واتساب برو CRM. يرجى التواصل مع الإدارة للتجديد.", true);
         return;
       }
       S.account = d.user;
