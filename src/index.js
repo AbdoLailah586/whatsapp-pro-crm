@@ -54,20 +54,6 @@ async function migrateLegacyDataOnce() {
     } catch (e) {
       console.warn("[Migration] Legacy config -> database seed notice:", e.message);
     }
-
-    try {
-      const existingCreds = await crmDB.getAuthBlob(LEGACY_TENANT, "creds");
-      if (!existingCreds) {
-        const oldCredsPath = path.join(__dirname, "..", "auth_info", "creds.json");
-        if (fs.existsSync(oldCredsPath)) {
-          const raw = fs.readFileSync(oldCredsPath, "utf-8");
-          await crmDB.setAuthBlob(LEGACY_TENANT, "creds", raw);
-          console.log("[Migration] Imported the existing WhatsApp login into the database - no new QR scan needed.");
-        }
-      }
-    } catch (e) {
-      console.warn("[Migration] Legacy WhatsApp credential import notice:", e.message);
-    }
   });
 }
 

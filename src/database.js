@@ -1676,10 +1676,14 @@ class CRMDatabase {
 
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
-    const placeholders = keys.map(() => "?").join(",");
-    const rows = db.prepare(`SELECT key, value FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).all(uid, ...keys);
-    for (const r of rows) {
-      result[r.key] = r.value;
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
+      const chunk = keys.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = db.prepare(`SELECT key, value FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).all(uid, ...chunk);
+      for (const r of rows) {
+        result[r.key] = r.value;
+      }
     }
     return result;
   }
@@ -1762,18 +1766,50 @@ class CRMDatabase {
     return db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ? AND key = ?").run(uid, key);
   }
 
-  async clearAuthBlobs(userId) {
+  async deleteAuthBlobs(userId, keys) {
+    if (!keys || keys.length === 0) return;
     const uid = String(userId || LEGACY_TENANT);
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       return this.pgPool.query(
-        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1",
-        [uid]
+        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1 AND key = ANY($2)",
+        [uid, keys]
       );
     }
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
-    return db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ?").run(uid);
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
+      const chunk = keys.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(",");
+      db.prepare(`DELETE FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).run(uid, ...chunk);
+    }
+  }
+
+  async clearAuthBlobs(userId) {
+    const uid = String(userId || LEGACY_TENANT);
+    if (this.isPostgres) {
+      await this.initWaAuthTablePg();
+      await this.pgPool.query(
+        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1",
+        [uid]
+      );
+      try {
+        await this.pgPool.query(
+          `DELETE FROM "${pgSchemaFor(uid)}".tenant_kv WHERE key LIKE 'wa_auth:%'`
+        );
+      } catch (e) {}
+      return;
+    }
+    const db = this._legacySqliteDb || this.db;
+    this._ensureWaAuthTableSqlite(db);
+    db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ?").run(uid);
+    try {
+      db.prepare("DELETE FROM tenant_kv WHERE key LIKE ?").run("wa_auth:%");
+      if (this._sqliteHandles && this._sqliteHandles.has(uid)) {
+        this._sqliteHandles.get(uid).prepare("DELETE FROM tenant_kv WHERE key LIKE ?").run("wa_auth:%");
+      }
+    } catch (e) {}
   }
 
   // ==========================================================

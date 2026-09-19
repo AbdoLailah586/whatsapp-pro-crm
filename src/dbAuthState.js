@@ -44,25 +44,10 @@ async function useDbAuthState(userId) {
   // 1. Initial creds resolution
   let creds = await readData("creds");
 
-  // If this is the legacy tenant and no creds are in the DB yet, migrate from disk if present
-  if (!creds && isLegacy) {
-    try {
-      const legacyCredsFile = path.join(legacyAuthDir, "creds.json");
-      if (fs.existsSync(legacyCredsFile)) {
-        const fileContent = fs.readFileSync(legacyCredsFile, "utf-8");
-        creds = JSON.parse(fileContent, BufferJSON.reviver);
-        if (creds) {
-          await writeData("creds", creds);
-          console.log("[Auth] Successfully migrated legacy disk WhatsApp credentials into whatsapp_sessions table.");
-        }
-      }
-    } catch (e) {
-      console.warn("[Auth] Legacy disk creds migration notice:", e.message);
-    }
-  }
-
-  if (!creds) {
+  // If creds is missing or is an invalid/dead session (e.g. unlinked or 401 logged out where me was set but registered is false)
+  if (!creds || (creds.registered === false && creds.me)) {
     creds = initAuthCreds();
+    await writeData("creds", creds);
   }
 
   const stateObj = {
@@ -162,7 +147,7 @@ async function useDbAuthState(userId) {
           await crmDB.setAuthBlobs(uid, toWrite);
         }
         if (toDelete.length > 0) {
-          await Promise.all(toDelete.map((k) => removeData(k)));
+          await crmDB.deleteAuthBlobs(uid, toDelete);
         }
       },
     },
@@ -171,7 +156,11 @@ async function useDbAuthState(userId) {
   return {
     state: stateObj,
     saveCreds: async () => {
-      await writeData("creds", stateObj.creds);
+      try {
+        await writeData("creds", stateObj.creds);
+      } catch (err) {
+        console.warn(`[Auth:${uid}] Failed to save creds:`, err.message);
+      }
     },
     // Fully clears this account's WhatsApp session (used on logout / relink)
     clearAll: async () => {

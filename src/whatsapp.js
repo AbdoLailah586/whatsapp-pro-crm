@@ -89,18 +89,18 @@ class WhatsAppClient {
         auth: state,
         browser: Browsers.windows("Desktop"),
         syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
       });
 
-      // saveCreds doesn't need the partial update argument — Baileys
-      // internally Object.assign()s the partial into authState.creds
-      // before this handler fires, so saveCreds() just persists the
-      // already-updated reference.  The auth-blob functions use an
-      // explicit userId parameter, so AsyncLocalStorage context isn't
-      // strictly needed, but we keep runAsTenant for any side-effect
-      // code that might read currentUserId() in the call chain.
-      this.socket.ev.on("creds.update", () =>
-        runAsTenant(this.userId, () => saveCreds())
-      );
+      this.socket.ev.on("creds.update", async () => {
+        try {
+          await runAsTenant(this.userId, () => saveCreds());
+        } catch (e) {
+          console.warn(`[WhatsApp:${this.userId}] creds.update notice:`, e.message);
+        }
+      });
 
       this.socket.ev.on("connection.update", (update) =>
         runAsTenant(this.userId, () => this._handleConnectionUpdate(update))
@@ -156,15 +156,17 @@ class WhatsAppClient {
         return;
       }
 
-      const shouldReconnect = !isLoggedOut;
-      console.log(`[WhatsApp:${this.userId}] Connection closed (code: ${statusCode}). Reconnect: ${shouldReconnect}`);
-
-      if (shouldReconnect) {
-        this.emit("status_change", { status: "connecting" });
-        setTimeout(() => this.start(), 3000);
-      } else {
-        this.emit("status_change", { status: this.status, reason: statusCode });
+      if (isLoggedOut) {
+        console.warn(`[WhatsApp:${this.userId}] ⚠️ WhatsApp session logged out / revoked (code: ${statusCode}). Resetting auth state for fresh QR pairing...`);
+        this.emit("status_change", { status: "disconnected", reason: "logged_out" });
+        await runAsTenant(this.userId, () => crmDB.clearAuthBlobs(this.userId)).catch(() => {});
+        setTimeout(() => this.start(), 1500);
+        return;
       }
+
+      console.log(`[WhatsApp:${this.userId}] Connection closed (code: ${statusCode}). Reconnecting in 3s...`);
+      this.emit("status_change", { status: "connecting" });
+      setTimeout(() => this.start(), 3000);
     } else if (connection === "open") {
       this.status = "connected";
       this.qrDataUrl = null;
