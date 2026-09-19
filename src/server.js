@@ -100,9 +100,11 @@ authRouter.post("/register", async (req, res) => {
     const passwordHash = await hashPassword(password);
     const user = await crmDB.createUser({ id, email, passwordHash, displayName });
 
+    const token = signToken(user);
     setSessionCookie(res, user);
     res.json({
       success: true,
+      token,
       isFirstUser,
       user: { id: user.id, email: user.email, displayName: user.displayName },
     });
@@ -114,9 +116,14 @@ authRouter.post("/register", async (req, res) => {
 
 authRouter.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    let { email, password } = req.body || {};
+    email = String(email || "").trim();
     if (!email || !password) {
       return res.status(400).json({ error: "البريد الإلكتروني وكلمة المرور مطلوبان." });
+    }
+    // Allow phone numbers as account identifier
+    if (/^\+?\d{8,15}$/.test(email)) {
+      email = `${email.replace(/\D/g, "")}@whatsapp.pro`;
     }
     const user = await crmDB.getUserByEmail(email);
     if (!user) return res.status(401).json({ error: "بيانات الدخول غير صحيحة." });
@@ -124,9 +131,11 @@ authRouter.post("/login", async (req, res) => {
     const ok = await verifyPassword(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "بيانات الدخول غير صحيحة." });
 
+    const token = signToken(user);
     setSessionCookie(res, user);
     res.json({
       success: true,
+      token,
       user: { id: user.id, email: user.email, displayName: user.display_name },
     });
   } catch (err) {
@@ -142,7 +151,10 @@ authRouter.post("/logout", (req, res) => {
 
 authRouter.get("/me", async (req, res) => {
   try {
-    const token = req.cookies?.[COOKIE_NAME];
+    let token = req.cookies?.[COOKIE_NAME];
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+      token = req.headers.authorization.slice(7).trim();
+    }
     const payload = token && verifyToken(token);
     if (!payload || !payload.uid) return res.status(401).json({ error: "not signed in" });
     const user = await crmDB.getUserById(payload.uid);
@@ -159,7 +171,10 @@ app.use("/api/auth", authRouter);
 // with that account's tenant context active for every database call
 // made anywhere during the request (see tenant.js).
 function requireAuth(req, res, next) {
-  const token = req.cookies?.[COOKIE_NAME];
+  let token = req.cookies?.[COOKIE_NAME];
+  if (!token && req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+    token = req.headers.authorization.slice(7).trim();
+  }
   const payload = token && verifyToken(token);
   if (!payload || !payload.uid) {
     return res.status(401).json({ error: "غير مصرح - يرجى تسجيل الدخول." });
@@ -175,14 +190,14 @@ app.use("/api", (req, res, next) => {
 });
 
 // ==========================================================
-// Socket.io - authenticate via the same session cookie, then
+// Socket.io - authenticate via session cookie or token, then
 // join a private per-account room so events never cross accounts.
 // ==========================================================
 io.use((socket, next) => {
   try {
     const raw = socket.handshake.headers.cookie || "";
     const parsed = cookie.parse(raw);
-    const token = parsed[COOKIE_NAME];
+    const token = parsed[COOKIE_NAME] || socket.handshake.auth?.token || socket.handshake.query?.token;
     const payload = token && verifyToken(token);
     if (!payload || !payload.uid) return next(new Error("unauthorized"));
     socket.userId = payload.uid;
@@ -744,6 +759,20 @@ app.post("/api/contacts/:jid/send", async (req, res) => {
 
     const client = whatsapp.getClient(req.userId);
     const sent = await client.sendMessage(jid, text, false);
+    res.json({ success: true, message: sent });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/contacts/:jid/send-media", upload.single("image"), async (req, res) => {
+  try {
+    const jid = decodeURIComponent(req.params.jid);
+    const caption = req.body.caption || "";
+    if (!req.file) return res.status(400).json({ error: "No image file uploaded." });
+    const buffer = fs.readFileSync(req.file.path);
+    const client = whatsapp.getClient(req.userId);
+    const sent = await client.sendMessage(jid, caption, false, buffer);
     res.json({ success: true, message: sent });
   } catch (err) {
     res.status(500).json({ error: err.message });

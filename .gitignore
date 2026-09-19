@@ -25,3 +25,4 @@ scratch/
 Thumbs.db
 .tempmediaStorage/
 .user_uploaded/
+*.apk
