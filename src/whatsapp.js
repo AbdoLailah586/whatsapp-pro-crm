@@ -82,16 +82,22 @@ class WhatsAppClient {
       const { state, saveCreds } = await useDbAuthState(this.userId);
       const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
 
-      const browserTag = `Acc-${String(this.userId).replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "main"}`;
       this.socket = makeWASocket({
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
         auth: state,
-        browser: ["WhatsApp Pro", browserTag, "2.0.0"],
+        browser: Browsers.windows("Desktop"),
         syncFullHistory: false,
       });
 
+      // saveCreds doesn't need the partial update argument — Baileys
+      // internally Object.assign()s the partial into authState.creds
+      // before this handler fires, so saveCreds() just persists the
+      // already-updated reference.  The auth-blob functions use an
+      // explicit userId parameter, so AsyncLocalStorage context isn't
+      // strictly needed, but we keep runAsTenant for any side-effect
+      // code that might read currentUserId() in the call chain.
       this.socket.ev.on("creds.update", () =>
         runAsTenant(this.userId, () => saveCreds())
       );
