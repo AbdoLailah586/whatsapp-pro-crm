@@ -164,6 +164,13 @@ class WhatsAppClient {
         return;
       }
 
+      if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+        console.log(`[WhatsApp:${this.userId}] 🔄 Restart required (code 515) to complete pairing handshake. Reconnecting in 1s...`);
+        this.emit("status_change", { status: "connecting" });
+        setTimeout(() => this.start(), 1000);
+        return;
+      }
+
       console.log(`[WhatsApp:${this.userId}] Connection closed (code: ${statusCode}). Reconnecting in 3s...`);
       this.emit("status_change", { status: "connecting" });
       setTimeout(() => this.start(), 3000);

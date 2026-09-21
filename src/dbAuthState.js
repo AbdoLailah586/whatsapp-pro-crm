@@ -44,8 +44,8 @@ async function useDbAuthState(userId) {
   // 1. Initial creds resolution
   let creds = await readData("creds");
 
-  // If creds is missing or is an invalid/dead session (e.g. unlinked or 401 logged out where me was set but registered is false)
-  if (!creds || (creds.registered === false && creds.me)) {
+  // If creds is missing from DB, initialize fresh auth creds
+  if (!creds) {
     creds = initAuthCreds();
     await writeData("creds", creds);
   }
