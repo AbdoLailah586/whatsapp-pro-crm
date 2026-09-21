@@ -312,14 +312,14 @@ class CRMDatabase {
       );
 
       -- Dedicated WhatsApp (Baileys) session table with strict compound primary key
-      CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+      CREATE TABLE IF NOT EXISTS baileys_auth_store (
         user_id TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_id, key)
       );
-      CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON whatsapp_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_baileys_auth_user ON baileys_auth_store(user_id);
 
       CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_jid, timestamp);
       CREATE INDEX IF NOT EXISTS idx_contacts_time ON contacts(last_message_time DESC);
@@ -424,14 +424,14 @@ class CRMDatabase {
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS expires_at BIGINT;
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS phone TEXT;
-        CREATE TABLE IF NOT EXISTS public.whatsapp_sessions (
+        CREATE TABLE IF NOT EXISTS public.baileys_auth_store (
           user_id TEXT NOT NULL,
           key TEXT NOT NULL,
           value TEXT NOT NULL,
           updated_at BIGINT NOT NULL,
           PRIMARY KEY (user_id, key)
         );
-        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON public.whatsapp_sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_baileys_auth_user ON public.baileys_auth_store(user_id);
       `);
       this._waAuthTableInitializedPg = true;
       this._pgSchemasInitialized.add("public");
@@ -1586,14 +1586,14 @@ class CRMDatabase {
     if (this._waAuthTableInitializedPg) return;
     try {
       await this.pgPool.query(`
-        CREATE TABLE IF NOT EXISTS public.whatsapp_sessions (
+        CREATE TABLE IF NOT EXISTS public.baileys_auth_store (
           user_id TEXT NOT NULL,
           key TEXT NOT NULL,
           value TEXT NOT NULL,
           updated_at BIGINT NOT NULL,
           PRIMARY KEY (user_id, key)
         );
-        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON public.whatsapp_sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_baileys_auth_user ON public.baileys_auth_store(user_id);
       `);
       this._waAuthTableInitializedPg = true;
     } catch (e) {
@@ -1604,14 +1604,14 @@ class CRMDatabase {
   _ensureWaAuthTableSqlite(db) {
     try {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+        CREATE TABLE IF NOT EXISTS baileys_auth_store (
           user_id TEXT NOT NULL,
           key TEXT NOT NULL,
           value TEXT NOT NULL,
           updated_at INTEGER NOT NULL,
           PRIMARY KEY (user_id, key)
         );
-        CREATE INDEX IF NOT EXISTS idx_wa_sessions_user ON whatsapp_sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_baileys_auth_user ON baileys_auth_store(user_id);
       `);
     } catch (e) {}
   }
@@ -1621,7 +1621,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       const res = await this.pgPool.query(
-        "SELECT value FROM public.whatsapp_sessions WHERE user_id = $1 AND key = $2",
+        "SELECT value FROM public.baileys_auth_store WHERE user_id = $1 AND key = $2",
         [uid, key]
       );
       if (res.rows[0]) return res.rows[0].value;
@@ -1642,7 +1642,7 @@ class CRMDatabase {
 
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
-    const row = db.prepare("SELECT value FROM whatsapp_sessions WHERE user_id = ? AND key = ?").get(uid, key);
+    const row = db.prepare("SELECT value FROM baileys_auth_store WHERE user_id = ? AND key = ?").get(uid, key);
     if (row) return row.value;
 
     // Backward compatibility fallback to migrate old SQLite row if present
@@ -1665,7 +1665,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       const res = await this.pgPool.query(
-        "SELECT key, value FROM public.whatsapp_sessions WHERE user_id = $1 AND key = ANY($2)",
+        "SELECT key, value FROM public.baileys_auth_store WHERE user_id = $1 AND key = ANY($2)",
         [uid, keys]
       );
       for (const row of res.rows) {
@@ -1680,7 +1680,7 @@ class CRMDatabase {
     for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
       const chunk = keys.slice(i, i + CHUNK_SIZE);
       const placeholders = chunk.map(() => "?").join(",");
-      const rows = db.prepare(`SELECT key, value FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).all(uid, ...chunk);
+      const rows = db.prepare(`SELECT key, value FROM baileys_auth_store WHERE user_id = ? AND key IN (${placeholders})`).all(uid, ...chunk);
       for (const r of rows) {
         result[r.key] = r.value;
       }
@@ -1694,7 +1694,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       return this.pgPool.query(
-        `INSERT INTO public.whatsapp_sessions (user_id, key, value, updated_at)
+        `INSERT INTO public.baileys_auth_store (user_id, key, value, updated_at)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
         [uid, key, value, now]
@@ -1703,7 +1703,7 @@ class CRMDatabase {
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
     return db.prepare(
-      `INSERT INTO whatsapp_sessions (user_id, key, value, updated_at)
+      `INSERT INTO baileys_auth_store (user_id, key, value, updated_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     ).run(uid, key, value, now);
@@ -1721,7 +1721,7 @@ class CRMDatabase {
         await client.query("BEGIN");
         for (const { key, value } of entries) {
           await client.query(
-            `INSERT INTO public.whatsapp_sessions (user_id, key, value, updated_at)
+            `INSERT INTO public.baileys_auth_store (user_id, key, value, updated_at)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
             [uid, key, value, now]
@@ -1740,7 +1740,7 @@ class CRMDatabase {
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
     const insertStmt = db.prepare(
-      `INSERT INTO whatsapp_sessions (user_id, key, value, updated_at)
+      `INSERT INTO baileys_auth_store (user_id, key, value, updated_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     );
@@ -1757,13 +1757,13 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       return this.pgPool.query(
-        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1 AND key = $2",
+        "DELETE FROM public.baileys_auth_store WHERE user_id = $1 AND key = $2",
         [uid, key]
       );
     }
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
-    return db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ? AND key = ?").run(uid, key);
+    return db.prepare("DELETE FROM baileys_auth_store WHERE user_id = ? AND key = ?").run(uid, key);
   }
 
   async deleteAuthBlobs(userId, keys) {
@@ -1772,7 +1772,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       return this.pgPool.query(
-        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1 AND key = ANY($2)",
+        "DELETE FROM public.baileys_auth_store WHERE user_id = $1 AND key = ANY($2)",
         [uid, keys]
       );
     }
@@ -1782,7 +1782,7 @@ class CRMDatabase {
     for (let i = 0; i < keys.length; i += CHUNK_SIZE) {
       const chunk = keys.slice(i, i + CHUNK_SIZE);
       const placeholders = chunk.map(() => "?").join(",");
-      db.prepare(`DELETE FROM whatsapp_sessions WHERE user_id = ? AND key IN (${placeholders})`).run(uid, ...chunk);
+      db.prepare(`DELETE FROM baileys_auth_store WHERE user_id = ? AND key IN (${placeholders})`).run(uid, ...chunk);
     }
   }
 
@@ -1791,7 +1791,7 @@ class CRMDatabase {
     if (this.isPostgres) {
       await this.initWaAuthTablePg();
       await this.pgPool.query(
-        "DELETE FROM public.whatsapp_sessions WHERE user_id = $1",
+        "DELETE FROM public.baileys_auth_store WHERE user_id = $1",
         [uid]
       );
       try {
@@ -1803,7 +1803,7 @@ class CRMDatabase {
     }
     const db = this._legacySqliteDb || this.db;
     this._ensureWaAuthTableSqlite(db);
-    db.prepare("DELETE FROM whatsapp_sessions WHERE user_id = ?").run(uid);
+    db.prepare("DELETE FROM baileys_auth_store WHERE user_id = ?").run(uid);
     try {
       db.prepare("DELETE FROM tenant_kv WHERE key LIKE ?").run("wa_auth:%");
       if (this._sqliteHandles && this._sqliteHandles.has(uid)) {
