@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+require("./redactSignalLogs");
 const { server } = require("./server");
 const whatsapp = require("./whatsapp");
 const crmDB = require("./database");

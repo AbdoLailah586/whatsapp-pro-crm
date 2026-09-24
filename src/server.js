@@ -1162,6 +1162,15 @@ app.put("/api/orders/:id/status", async (req, res) => {
 app.get("/api/campaigns", async (req, res) => {
   try {
     const campaigns = await crmDB.getCampaigns();
+    for (const campaign of campaigns) {
+      if (["queued", "running", "cooling", "paused", "waiting_connection"].includes(campaign.status) && !AutomationTools.campaignState[campaign.id]) {
+        campaign.status = "interrupted";
+        await crmDB.updateCampaignStatusOnly(campaign.id, "interrupted");
+      }
+      if (AutomationTools.campaignTiming[campaign.id]) {
+        Object.assign(campaign, AutomationTools.campaignTiming[campaign.id]);
+      }
+    }
     res.json({ success: true, campaigns });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1241,6 +1250,8 @@ app.post("/api/campaigns/:id/control", async (req, res) => {
   try {
     const campaignId = req.params.id;
     const { action } = req.body;
+    const ownedCampaign = (await crmDB.getCampaigns()).some((campaign) => campaign.id === campaignId);
+    if (!ownedCampaign) return res.status(404).json({ error: "Campaign not found." });
 
     if (!['pause', 'resume', 'cancel', 'skip_cooldown'].includes(action)) {
       return res.status(400).json({ error: "Invalid action. Use 'pause', 'resume', 'cancel', or 'skip_cooldown'." });
@@ -1248,9 +1259,12 @@ app.post("/api/campaigns/:id/control", async (req, res) => {
 
     if (AutomationTools.campaignState[campaignId]) {
       let newStatus = 'running';
-      if (action === 'resume' || action === 'skip_cooldown') {
+      if (action === 'resume') {
+        newStatus = AutomationTools.campaignTiming[campaignId]?.phase === 'cooling' ? 'cooling' : 'running';
+        AutomationTools.campaignState[campaignId] = newStatus;
+      } else if (action === 'skip_cooldown') {
         newStatus = 'running';
-        AutomationTools.campaignState[campaignId] = 'running';
+        AutomationTools.campaignState[campaignId] = 'skip_cooldown';
       } else if (action === 'pause') {
         newStatus = 'paused';
         AutomationTools.campaignState[campaignId] = 'paused';

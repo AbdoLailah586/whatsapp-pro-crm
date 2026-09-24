@@ -18,8 +18,23 @@ function loadConfig() {
   return {};
 }
 
+function withTimeout(operation, timeoutMs, message) {
+  let timer;
+  return Promise.race([
+    Promise.resolve().then(operation),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = 'CAMPAIGN_TIMEOUT';
+        reject(error);
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 class AutomationTools {
   static campaignState = {}; // campaignId -> 'running', 'paused', 'cancelled'
+  static campaignTiming = {}; // campaignId -> next send time and current target
 
   // 1. Record Lead / Order & Sync with Google Sheets & Email
   static async recordOrderLead({ contactJid, customerName, phone, customerEmail, orderDetails, address, totalPrice }) {
@@ -292,6 +307,7 @@ class AutomationTools {
     enableTyping = true,
     enableSpintax = true,
     verifyWhatsApp = true,
+    sendTimeoutMs = 90000,
     ioEmitter = null
   }) {
     if (!whatsappInstance || !whatsappInstance.socket) {
@@ -304,8 +320,17 @@ class AutomationTools {
     let sentInCurrentBatch = 0;
 
     // Run async in background
+    const emitProgress = (status, extra = {}) => {
+      if (ioEmitter) ioEmitter("campaign_progress", {
+        campaignId, sentCount, failedCount, total: contacts.length, status,
+        percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
+        ...extra,
+      });
+    };
     (async () => {
       AutomationTools.campaignState[campaignId] = 'running';
+
+      try {
 
       for (let i = 0; i < contacts.length; i++) {
         // Handle Pause / Cancel
@@ -314,17 +339,27 @@ class AutomationTools {
         }
         if (AutomationTools.campaignState[campaignId] === 'cancelled') {
           await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cancelled");
-          if (ioEmitter) {
-            ioEmitter("campaign_progress", {
-              campaignId,
-              sentCount,
-              failedCount,
-              total: contacts.length,
-              status: "cancelled",
-              percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
-            });
-          }
+          emitProgress("cancelled");
           break;
+        }
+
+        if (typeof whatsappInstance.isConnected === 'function' && !whatsappInstance.isConnected()) {
+          AutomationTools.campaignState[campaignId] = 'waiting_connection';
+          await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, 'waiting_connection');
+          emitProgress('waiting_connection');
+          while (!whatsappInstance.isConnected() && AutomationTools.campaignState[campaignId] !== 'cancelled') {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          if (AutomationTools.campaignState[campaignId] === 'cancelled') {
+            await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, 'cancelled');
+            emitProgress('cancelled');
+            break;
+          }
+          while (AutomationTools.campaignState[campaignId] === 'paused') {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          AutomationTools.campaignState[campaignId] = 'running';
+          await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, 'running');
         }
 
         // Anti-Ban Micro-Batch Cooling Pause
@@ -332,7 +367,9 @@ class AutomationTools {
           const cooldownMs = Math.max(1, Number(batchCooldownMinutes) || 45) * 60 * 1000;
           const coolingUntil = Date.now() + cooldownMs;
           AutomationTools.campaignState[campaignId] = 'cooling';
+          AutomationTools.campaignTiming[campaignId] = { nextSendAt: coolingUntil, phase: 'cooling' };
           await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cooling");
+          emitProgress("cooling", { nextSendAt: coolingUntil });
 
           console.log(`🛡️ [Anti-Ban Guard] Campaign #${campaignId} reached batch limit (${sentInCurrentBatch} sent). Cooling for ${batchCooldownMinutes} min...`);
 
@@ -347,42 +384,25 @@ class AutomationTools {
             }
 
             const remainingSeconds = Math.max(0, Math.ceil((coolingUntil - Date.now()) / 1000));
-            if (ioEmitter) {
-              ioEmitter("campaign_progress", {
-                campaignId,
-                sentCount,
-                failedCount,
-                total: contacts.length,
-                status: "cooling",
-                coolingUntil,
-                remainingSeconds,
-                percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
-              });
-            }
+            emitProgress("cooling", { nextSendAt: coolingUntil, remainingSeconds });
             await new Promise((r) => setTimeout(r, 3000));
           }
 
           if (AutomationTools.campaignState[campaignId] === 'cancelled') {
             await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "cancelled");
-            if (ioEmitter) {
-              ioEmitter("campaign_progress", {
-                campaignId,
-                sentCount,
-                failedCount,
-                total: contacts.length,
-                status: "cancelled",
-                percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
-              });
-            }
+            emitProgress("cancelled");
             break;
           }
 
           AutomationTools.campaignState[campaignId] = 'running';
+          delete AutomationTools.campaignTiming[campaignId];
           sentInCurrentBatch = 0;
           await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "running");
         }
 
         const target = contacts[i];
+        AutomationTools.campaignTiming[campaignId] = { phase: 'sending', targetIndex: i + 1 };
+        emitProgress("running", { phase: 'sending', targetIndex: i + 1 });
         let jid = "";
         let displayName = "";
         let logIdentifier = "";
@@ -428,25 +448,19 @@ class AutomationTools {
           }
         }
 
+        try {
         // 1. WhatsApp verification check if enabled
         if (verifyWhatsApp && !jid.includes("@g.us") && typeof whatsappInstance.isOnWhatsApp === "function") {
           try {
-            const check = await whatsappInstance.isOnWhatsApp(cleanPhone || jid);
+            const check = await withTimeout(() => whatsappInstance.isOnWhatsApp(cleanPhone || jid), 15000, 'WhatsApp verification timed out');
             if (check && check.exists === false) {
               failedCount++;
               console.log(`⚠️ [Anti-Ban Guard] Skipped non-WhatsApp number: ${logIdentifier}`);
               await crmDB.logCampaignItem(campaignId, logIdentifier, "failed", "الرقم غير مسجل في واتساب");
-              await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "running");
-              if (ioEmitter) {
-                ioEmitter("campaign_progress", {
-                  campaignId,
-                  sentCount,
-                  failedCount,
-                  total: contacts.length,
-                  status: "running",
-                  percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
-                });
-              }
+              const skippedStatus = AutomationTools.campaignState[campaignId] === 'cancelled' ? 'cancelled' : i === contacts.length - 1 ? "completed" : "running";
+              await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, skippedStatus);
+              emitProgress(skippedStatus);
+              if (skippedStatus === 'cancelled') break;
               continue;
             }
           } catch (chkErr) {
@@ -466,52 +480,66 @@ class AutomationTools {
         // 3. Human typing simulation
         if (enableTyping && typeof whatsappInstance.simulateHumanTyping === "function") {
           const typingMs = Math.min(5000, Math.max(2000, Math.floor(personalizedMsg.length * 25)));
-          await whatsappInstance.simulateHumanTyping(jid, typingMs);
+          try {
+            await withTimeout(() => whatsappInstance.simulateHumanTyping(jid, typingMs), typingMs + 10000, 'Typing indicator timed out');
+          } catch (typingErr) {
+            console.warn(`[Campaign] Typing indicator skipped for ${logIdentifier}: ${typingErr.message}`);
+          }
         }
 
         // 4. Send Message
-        try {
           let imageBuffer = null;
           if (imagePath) {
             const fs = require("fs");
             imageBuffer = fs.readFileSync(imagePath);
           }
-          await whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer);
+          await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من وصولها قبل إعادة المحاولة');
           sentCount++;
           sentInCurrentBatch++;
           await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
         } catch (err) {
+          if (err.code === 'CAMPAIGN_TIMEOUT') {
+            console.error(`[Campaign] Delivery uncertain for ${logIdentifier}:`, err.message);
+            await crmDB.logCampaignItem(campaignId, logIdentifier || `target ${i + 1}`, 'uncertain', err.message);
+            await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, 'needs_review');
+            emitProgress('needs_review', { error: err.message, targetIndex: i + 1 });
+            break;
+          }
           failedCount++;
           console.error(`[Campaign] Failed sending to ${logIdentifier}:`, err.message);
-          await crmDB.logCampaignItem(campaignId, logIdentifier, "failed", err.message);
+          await crmDB.logCampaignItem(campaignId, logIdentifier || `target ${i + 1}`, "failed", err.message);
         }
 
         const isLast = i === contacts.length - 1;
-        const currentStatus = isLast ? "completed" : "running";
+        const currentStatus = AutomationTools.campaignState[campaignId] === 'cancelled' ? 'cancelled' : isLast ? "completed" : "running";
         await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, currentStatus);
 
-        if (ioEmitter) {
-          ioEmitter("campaign_progress", {
-            campaignId,
-            sentCount,
-            failedCount,
-            total: contacts.length,
-            status: currentStatus,
-            percent: Math.round(((sentCount + failedCount) / contacts.length) * 100),
-          });
-        }
+        emitProgress(currentStatus);
+        if (currentStatus === 'cancelled') break;
 
-        if (!isLast) {
+        if (!isLast && !(batchSize > 0 && sentInCurrentBatch >= batchSize)) {
           // Anti-Ban Random Delay between minDelay and maxDelay
           const effMin = minDelay ? Number(minDelay) : Math.max(3, delaySeconds - 2);
           const effMax = maxDelay ? Number(maxDelay) : Math.max(effMin, delaySeconds + 3);
           const randomDelay = Math.floor(Math.random() * (effMax - effMin + 1) + effMin) * 1000;
+          const nextSendAt = Date.now() + randomDelay;
+          AutomationTools.campaignTiming[campaignId] = { nextSendAt, phase: 'waiting', targetIndex: i + 2 };
+          emitProgress("running", { nextSendAt, phase: 'waiting', targetIndex: i + 2 });
           await new Promise((r) => setTimeout(r, randomDelay));
         }
       }
-      
+      } catch (err) {
+        console.error(`[Campaign] Campaign ${campaignId} stopped:`, err);
+        try { await crmDB.logCampaignItem(campaignId, 'system', 'failed', err.message); }
+        catch (dbErr) { console.error(`[Campaign] Could not save error log for ${campaignId}:`, dbErr); }
+        try { await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, "failed"); }
+        catch (dbErr) { console.error(`[Campaign] Could not save failure for ${campaignId}:`, dbErr); }
+        emitProgress("failed", { error: err.message });
+      } finally {
       delete AutomationTools.campaignState[campaignId];
-    })();
+      delete AutomationTools.campaignTiming[campaignId];
+      }
+    })().catch((err) => console.error(`[Campaign] Unexpected background failure ${campaignId}:`, err));
 
     return { success: true, campaignId, total: contacts.length };
   }

@@ -39,6 +39,8 @@
     selectedGroups: new Set(),
     activePresetId: null,
     activeCampaignId: null,
+    campaignNextSendAt: null,
+    campaignStatus: null,
     recordsTab: "orders",
     view: "inbox",
     charts: {},
@@ -906,7 +908,7 @@
       id: "board", role: "full", title: "اللوحة", crumb: "اللوحة",
       render: function () {
         var a = S.analytics || {};
-        var running = S.campaigns.filter(function (c) { return c.status === "running" || c.status === "paused"; })[0];
+        var running = S.campaigns.filter(function (c) { return ["running", "paused", "cooling", "waiting_connection"].includes(c.status); })[0];
         var recentOrders = S.orders.slice(0, 5);
         var upcoming = S.bookings.filter(function (b) {
           return b.status !== "CANCELLED" && new Date(b.start_time || b.startTime).getTime() > Date.now();
@@ -1414,6 +1416,7 @@
                 '<button class="btn btn-primary btn-block" data-act="start-campaign"><i class="fa-solid fa-paper-plane"></i> إطلاق الحملة</button>' +
                 '<div class="progress hidden" id="cProgress" style="margin-top:14px">' +
                   '<div class="progress-top"><span id="cProgressText">—</span><span class="mono" id="cProgressPct">0%</span></div>' +
+                  '<div id="cNextSend" aria-live="polite" style="font-size:12px;margin:7px 0;color:var(--faint)"></div>' +
                   '<div class="progress-track"><div class="progress-fill" id="cProgressBar"></div></div>' +
                   '<div id="cCoolingAlert" class="hidden" style="margin-top:8px;padding:8px 10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:var(--r-1);font-size:12px;color:var(--warn,#f59e0b);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">' +
                     '<span><i class="fa-solid fa-mug-hot"></i> فترة راحة استراتيجية لمنع الحظر</span>' +
@@ -1525,7 +1528,11 @@
           applyJsonFilters();
         }
 
-        if (S.activeCampaignId) showCampaignProgress();
+        if (S.activeCampaignId) {
+          var active = S.campaigns.filter(function (c) { return String(c.id) === String(S.activeCampaignId); })[0];
+          if (active) updateCampaignProgress(active);
+          else showCampaignProgress();
+        }
       }
     };
   }
@@ -1533,8 +1540,8 @@
   function campaignsHistory() {
     if (!S.campaigns.length) return '<p class="faint" style="font-size:12.5px">لسه مفيش حملات.</p>';
     return '<div class="tile-list">' + S.campaigns.map(function (c) {
-      var tone = c.status === "completed" ? "ok" : c.status === "cancelled" ? "danger" : c.status === "cooling" ? "warn" : "warn";
-      var label = { completed: "مكتملة", running: "جارية", paused: "متوقفة", cancelled: "ملغية", cooling: "استراحة أمان" }[c.status] || c.status;
+      var tone = c.status === "completed" ? "ok" : ["cancelled", "failed", "interrupted", "needs_review"].includes(c.status) ? "danger" : "warn";
+      var label = { completed: "مكتملة", queued: "في الانتظار", running: "جارية", paused: "متوقفة", cancelled: "ملغية", cooling: "استراحة أمان", waiting_connection: "بانتظار اتصال واتساب", failed: "توقفت بخطأ", interrupted: "انقطعت بعد إعادة تشغيل السيرفر", needs_review: "تحتاج مراجعة: إرسال غير مؤكد" }[c.status] || c.status;
       return '<div class="li" data-campaign="' + attr(c.id) + '">' +
         '<span class="grow"><span style="display:block;font-weight:600">' + esc(c.title) + "</span>" +
         '<span class="faint" style="font-size:11px">تم ' + c.sent_count + " · فشل " + c.failed_count + " · من " + c.target_count + "</span></span>" +
@@ -1769,6 +1776,16 @@
     return api("/api/campaigns").then(function (d) {
       if (d && d.success) {
         S.campaigns = d.campaigns || [];
+        var active = S.campaigns.filter(function (c) { return ["running", "cooling", "paused", "waiting_connection"].includes(c.status); })[0];
+        if (active) {
+          S.activeCampaignId = active.id;
+          showCampaignProgress();
+          updateCampaignProgress(active);
+        } else {
+          S.activeCampaignId = null;
+          S.campaignNextSendAt = null;
+          S.campaignStatus = null;
+        }
         var h = $("cHistory");
         if (h) h.innerHTML = campaignsHistory();
       }
@@ -1778,6 +1795,38 @@
   function showCampaignProgress() {
     var p = $("cProgress");
     if (p) p.classList.remove("hidden");
+  }
+
+  function renderCampaignCountdown() {
+    var el = $("cNextSend");
+    if (!el) return;
+    if (S.campaignStatus === "paused") { el.textContent = "الحملة متوقفة مؤقتاً"; return; }
+    if (S.campaignStatus === "waiting_connection") { el.textContent = "بانتظار عودة اتصال واتساب"; return; }
+    if (!S.campaignNextSendAt) { el.textContent = ""; return; }
+    var seconds = Math.max(0, Math.ceil((S.campaignNextSendAt - Date.now()) / 1000));
+    el.textContent = "الرسالة التالية بعد " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0") + " دقيقة:ثانية";
+  }
+  setInterval(renderCampaignCountdown, 1000);
+
+  function updateCampaignProgress(d) {
+    var box = $("cProgress");
+    if (!box) return;
+    box.classList.remove("hidden");
+    var sent = d.sentCount !== undefined ? d.sentCount : d.sent_count;
+    var failed = d.failedCount !== undefined ? d.failedCount : d.failed_count;
+    var total = d.total !== undefined ? d.total : d.target_count;
+    var percent = d.percent !== undefined ? d.percent : Math.round(((sent + failed) / Math.max(1, total)) * 100);
+    S.campaignStatus = d.status;
+    S.campaignNextSendAt = d.nextSendAt || null;
+    renderCampaignCountdown();
+    var coolingBox = $("cCoolingAlert");
+    if (coolingBox) coolingBox.classList.toggle("hidden", d.status !== "cooling");
+    $("cProgressText").textContent = d.status === "waiting_connection" ? "بانتظار عودة اتصال واتساب · تم " + sent + " · فشل " + failed + " · من " + total :
+      d.status === "cooling" ? "استراحة · تم " + sent + " · فشل " + failed + " · من " + total :
+      d.phase === "sending" ? "جاري تجهيز الرسالة " + d.targetIndex + " · تم " + sent + " · فشل " + failed + " · من " + total :
+      "تم " + sent + " · فشل " + failed + " · من " + total;
+    $("cProgressPct").textContent = percent + "%";
+    $("cProgressBar").style.width = percent + "%";
   }
 
   function startCampaign() {
@@ -1915,11 +1964,11 @@
           if (!w) return;
           if (d && d.success && d.logs && d.logs.length) {
             w.innerHTML = '<div class="table-wrap"><table class="data" style="min-width:480px"><thead><tr>' +
-              "<th>الرقم</th><th>الحالة</th><th>الخطأ</th><th>الوقت</th></tr></thead><tbody>" +
+              "<th>الجهة</th><th>الحالة</th><th>الخطأ</th><th>الوقت</th></tr></thead><tbody>" +
               d.logs.map(function (l) {
                 return '<tr><td class="num" dir="ltr">' + esc(l.phone) + "</td>" +
-                  '<td><span class="tag" data-tone="' + (l.status === "success" ? "ok" : "danger") + '">' +
-                  (l.status === "success" ? "نجاح" : "فشل") + "</span></td>" +
+                  '<td><span class="tag" data-tone="' + (l.status === "sent" || l.status === "success" ? "ok" : "danger") + '">' +
+                  (l.status === "sent" || l.status === "success" ? "تم الإرسال" : l.status === "uncertain" ? "وصول غير مؤكد" : "فشل") + "</span></td>" +
                   '<td style="font-size:11px">' + esc(l.error_message || "-") + "</td>" +
                   '<td class="faint" style="font-size:11px">' + esc(fmtDateTime(l.sent_at)) + "</td></tr>";
               }).join("") + "</tbody></table></div>";
@@ -3405,32 +3454,19 @@
 
   socket.on("campaign_progress", function (d) {
     if (!d) return;
-    var box = $("cProgress");
-    if (box) {
-      box.classList.remove("hidden");
-      var coolingBox = $("cCoolingAlert");
-      if (d.status === "cooling") {
-        if (coolingBox) coolingBox.classList.remove("hidden");
-        var mins = Math.ceil((d.remainingSeconds || 0) / 60);
-        $("cProgressText").innerHTML = '<span style="color:var(--warn,#f59e0b)"><i class="fa-solid fa-hourglass-half"></i> فترة راحة أمان: متبقي ~' + mins + ' دقيقة (أرسل ' + d.sentCount + ' من ' + d.total + ')</span>';
-      } else {
-        if (coolingBox) coolingBox.classList.add("hidden");
-        $("cProgressText").textContent = "تم " + d.sentCount + " · فشل " + d.failedCount + " · من " + d.total;
-      }
-      $("cProgressPct").textContent = d.percent + "%";
-      $("cProgressBar").style.width = d.percent + "%";
-      box.setAttribute("data-done", d.percent >= 100 ? "1" : "0");
-    }
+    if (S.activeCampaignId && String(d.campaignId) !== String(S.activeCampaignId)) return;
+    S.activeCampaignId = d.campaignId;
+    updateCampaignProgress(d);
     var bBar = $("boardProgressBar");
     if (bBar) {
       bBar.style.width = d.percent + "%";
       $("boardProgressText").textContent = "تم " + d.sentCount + " من " + d.total;
       $("boardProgressPct").textContent = d.percent + "%";
     }
-    if (d.status === "completed" || d.status === "cancelled") {
+    if (["completed", "cancelled", "failed", "needs_review"].includes(d.status)) {
       var coolingBox = $("cCoolingAlert");
       if (coolingBox) coolingBox.classList.add("hidden");
-      toast("الحملة " + (d.status === "completed" ? "اكتملت" : "اتلغت") + " · " + d.sentCount + " ناجحة، " + d.failedCount + " فشلت",
+      toast("الحملة " + (d.status === "completed" ? "اكتملت" : d.status === "needs_review" ? "تحتاج مراجعة: " + (d.error || "نتيجة إرسال غير مؤكدة") : d.status === "failed" ? "توقفت بخطأ: " + (d.error || "راجع سجل السيرفر") : "اتلغت") + " · " + d.sentCount + " ناجحة، " + d.failedCount + " فشلت",
             d.status === "completed" ? "ok" : "warn");
       fetchCampaigns();
     }
@@ -3439,6 +3475,8 @@
   socket.on("campaign_status_changed", function (d) {
     if (!d) return;
     if (String(d.campaignId) === String(S.activeCampaignId)) {
+      S.campaignStatus = d.status;
+      renderCampaignCountdown();
       var p = document.querySelector('[data-cc="pause"]'), r = document.querySelector('[data-cc="resume"]');
       if (p && r) {
         p.classList.toggle("hidden", d.status === "paused");
@@ -3446,6 +3484,11 @@
       }
     }
     fetchCampaigns();
+  });
+
+  socket.on("connect", fetchCampaigns);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) fetchCampaigns();
   });
 
   socket.on("rules_updated", function (d) {

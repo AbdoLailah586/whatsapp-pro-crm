@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const Database = require("better-sqlite3");
 const { Pool } = require("pg");
 const lidMapper = require("./lidMapper");
@@ -1192,7 +1193,7 @@ class CRMDatabase {
 
   // --- Campaigns ---
   async createCampaign(title, template, targetCount, delaySeconds = 8) {
-    const id = "camp_" + Date.now();
+    const id = "camp_" + crypto.randomUUID();
     if (this.isPostgres) {
       await this.q(`
         INSERT INTO campaigns (id, title, message_template, target_count, sent_count, failed_count, delay_seconds, status, created_at)
