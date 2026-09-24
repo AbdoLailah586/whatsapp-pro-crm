@@ -327,6 +327,8 @@ class AutomationTools {
         ...extra,
       });
     };
+    const targetName = (target) => typeof target === 'string' ? target :
+      (target?.name || target?.subject || target?.phone || target?.jid || '');
     (async () => {
       AutomationTools.campaignState[campaignId] = 'running';
 
@@ -401,8 +403,8 @@ class AutomationTools {
         }
 
         const target = contacts[i];
-        AutomationTools.campaignTiming[campaignId] = { phase: 'sending', targetIndex: i + 1 };
-        emitProgress("running", { phase: 'sending', targetIndex: i + 1 });
+        AutomationTools.campaignTiming[campaignId] = { phase: 'sending', targetIndex: i + 1, targetName: targetName(target) };
+        emitProgress("running", { phase: 'sending', targetIndex: i + 1, targetName: targetName(target) });
         let jid = "";
         let displayName = "";
         let logIdentifier = "";
@@ -523,8 +525,8 @@ class AutomationTools {
           const effMax = maxDelay ? Number(maxDelay) : Math.max(effMin, delaySeconds + 3);
           const randomDelay = Math.floor(Math.random() * (effMax - effMin + 1) + effMin) * 1000;
           const nextSendAt = Date.now() + randomDelay;
-          AutomationTools.campaignTiming[campaignId] = { nextSendAt, phase: 'waiting', targetIndex: i + 2 };
-          emitProgress("running", { nextSendAt, phase: 'waiting', targetIndex: i + 2 });
+          AutomationTools.campaignTiming[campaignId] = { nextSendAt, phase: 'waiting', targetIndex: i + 2, targetName: targetName(contacts[i + 1]) };
+          emitProgress("running", { nextSendAt, phase: 'waiting', targetIndex: i + 2, targetName: targetName(contacts[i + 1]) });
           await new Promise((r) => setTimeout(r, randomDelay));
         }
       }

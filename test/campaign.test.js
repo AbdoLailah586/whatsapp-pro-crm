@@ -47,6 +47,7 @@ test('a 58-target campaign finishes after four target failures', async () => {
   assert.equal(db.logs.at(-1).status, 'failed');
   assert.deepEqual(db.progress.at(-1), { sent: 54, failed: 4, status: 'completed' });
   assert.ok(events.some((event) => event.phase === 'waiting' && event.nextSendAt > Date.now() - 5000));
+  assert.ok(events.some((event) => event.phase === 'waiting' && event.targetName === 'group2@g.us'));
 
   db.progress = [];
   db.logs = [];

@@ -40,6 +40,7 @@
     activePresetId: null,
     activeCampaignId: null,
     campaignNextSendAt: null,
+    campaignNextTargetName: null,
     campaignStatus: null,
     recordsTab: "orders",
     view: "inbox",
@@ -1784,6 +1785,7 @@
         } else {
           S.activeCampaignId = null;
           S.campaignNextSendAt = null;
+          S.campaignNextTargetName = null;
           S.campaignStatus = null;
         }
         var h = $("cHistory");
@@ -1804,7 +1806,8 @@
     if (S.campaignStatus === "waiting_connection") { el.textContent = "بانتظار عودة اتصال واتساب"; return; }
     if (!S.campaignNextSendAt) { el.textContent = ""; return; }
     var seconds = Math.max(0, Math.ceil((S.campaignNextSendAt - Date.now()) / 1000));
-    el.textContent = "الرسالة التالية بعد " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0") + " دقيقة:ثانية";
+    el.textContent = (S.campaignNextTargetName ? "الجهة التالية: " + S.campaignNextTargetName + " · " : "") +
+      "الرسالة التالية بعد " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0") + " دقيقة:ثانية";
   }
   setInterval(renderCampaignCountdown, 1000);
 
@@ -1818,6 +1821,7 @@
     var percent = d.percent !== undefined ? d.percent : Math.round(((sent + failed) / Math.max(1, total)) * 100);
     S.campaignStatus = d.status;
     S.campaignNextSendAt = d.nextSendAt || null;
+    S.campaignNextTargetName = d.targetName || null;
     renderCampaignCountdown();
     var coolingBox = $("cCoolingAlert");
     if (coolingBox) coolingBox.classList.toggle("hidden", d.status !== "cooling");
