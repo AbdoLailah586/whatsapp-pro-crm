@@ -319,12 +319,16 @@ class AutomationTools {
     let failedCount = 0;
     let sentInCurrentBatch = 0;
 
-    // Preload image buffer once outside the loop if provided
+    // Preload and pre-upload image buffer once outside the loop if provided
     let imageBuffer = null;
+    let preparedMedia = null;
     if (imagePath) {
       try {
         if (fs.existsSync(imagePath)) {
           imageBuffer = fs.readFileSync(imagePath);
+          if (typeof whatsappInstance.prepareMedia === "function") {
+            preparedMedia = await whatsappInstance.prepareMedia(imageBuffer, 'image');
+          }
         }
       } catch (imgErr) {
         console.warn(`[Campaign] Could not read campaign image from ${imagePath}:`, imgErr.message);
@@ -521,7 +525,7 @@ class AutomationTools {
         }
 
         // 5. Send Message
-        await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
+        await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer, preparedMedia), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
         sentCount++;
         sentInCurrentBatch++;
         await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");

@@ -389,7 +389,19 @@ class WhatsAppClient {
     }
   }
 
-  async sendMessage(to, text, autoReplied = false, imageBuffer = null) {
+  async prepareMedia(buffer, type = 'image') {
+    if (!this.socket || !this.socket.waUploadToServer) return null;
+    try {
+      const { prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+      const payload = type === 'image' ? { image: buffer } : { document: buffer };
+      return await prepareWAMessageMedia(payload, { upload: this.socket.waUploadToServer });
+    } catch (e) {
+      console.warn(`[WhatsApp:${this.userId}] Media pre-upload notice:`, e.message);
+      return null;
+    }
+  }
+
+  async sendMessage(to, text, autoReplied = false, imageBuffer = null, preparedMedia = null) {
     if (!this.socket || this.status !== "connected") {
       throw new Error("WhatsApp client is not connected.");
     }
@@ -404,18 +416,32 @@ class WhatsAppClient {
     }
 
     let sent;
-    if (imageBuffer) {
+    if (preparedMedia && preparedMedia.imageMessage) {
+      const { generateWAMessageFromContent } = require("@whiskeysockets/baileys");
+      const msg = generateWAMessageFromContent(
+        jid,
+        {
+          imageMessage: {
+            ...preparedMedia.imageMessage,
+            caption: text || "",
+          },
+        },
+        { userJid: this.user?.id }
+      );
+      await this.socket.relayMessage(jid, msg.message, { messageId: msg.key.id });
+      sent = msg;
+    } else if (imageBuffer) {
       sent = await this.socket.sendMessage(jid, { image: imageBuffer, caption: text });
     } else {
       sent = await this.socket.sendMessage(jid, { text });
     }
 
     const sentData = {
-      id: sent.key.id,
+      id: sent?.key?.id || `msg_${Date.now()}`,
       sender: jid,
       senderName: autoReplied ? "البوت الذكي" : "أنت (Me)",
-      text: text || (imageBuffer ? "صورة" : ""),
-      mediaType: imageBuffer ? "image" : null,
+      text: text || (imageBuffer || preparedMedia ? "صورة" : ""),
+      mediaType: (imageBuffer || preparedMedia) ? "image" : null,
       timestamp: Date.now(),
       fromMe: true,
       autoReplied: !!autoReplied,
