@@ -466,6 +466,38 @@ class WhatsAppClient {
     }
   }
 
+  async canSendTo(jid) {
+    if (!jid || !jid.includes("@g.us")) return { allowed: true };
+    try {
+      let meta = this.groupCache.get(jid);
+      if (!meta && this.socket && this.isConnected) {
+        meta = await this.socket.groupMetadata(jid).catch(() => null);
+        if (meta) this.groupCache.set(jid, meta);
+      }
+      if (!meta) {
+        return { allowed: false, reason: "لست عضواً في هذه المجموعة أو تم مغادرتها" };
+      }
+      if (meta.announce) {
+        const myJid = this.user?.id ? this.user.id.split(":")[0].split("@")[0] : null;
+        const myLid = this.user?.lid ? this.user.lid.split(":")[0].split("@")[0] : null;
+        const myParticipant = (meta.participants || []).find((p) => {
+          const pId = p.id ? p.id.split(":")[0].split("@")[0] : "";
+          return (myJid && pId === myJid) || (myLid && pId === myLid);
+        });
+        if (!myParticipant) {
+          return { allowed: false, reason: "لست عضواً في هذه المجموعة" };
+        }
+        const isAdm = myParticipant.admin === "admin" || myParticipant.admin === "superadmin";
+        if (!isAdm) {
+          return { allowed: false, reason: "المجموعة مغلقة (النشر مسموح للمشرفين فقط)" };
+        }
+      }
+      return { allowed: true };
+    } catch (e) {
+      return { allowed: true };
+    }
+  }
+
   async logout() {
     if (this.socket) {
       try {

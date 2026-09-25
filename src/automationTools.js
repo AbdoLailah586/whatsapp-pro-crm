@@ -307,7 +307,7 @@ class AutomationTools {
     enableTyping = true,
     enableSpintax = true,
     verifyWhatsApp = true,
-    sendTimeoutMs = 90000,
+    sendTimeoutMs = 35000,
     ioEmitter = null
   }) {
     if (!whatsappInstance || !whatsappInstance.socket) {
@@ -318,6 +318,18 @@ class AutomationTools {
     let sentCount = 0;
     let failedCount = 0;
     let sentInCurrentBatch = 0;
+
+    // Preload image buffer once outside the loop if provided
+    let imageBuffer = null;
+    if (imagePath) {
+      try {
+        if (fs.existsSync(imagePath)) {
+          imageBuffer = fs.readFileSync(imagePath);
+        }
+      } catch (imgErr) {
+        console.warn(`[Campaign] Could not read campaign image from ${imagePath}:`, imgErr.message);
+      }
+    }
 
     // Run async in background
     const emitProgress = (status, extra = {}) => {
@@ -451,7 +463,7 @@ class AutomationTools {
         }
 
         try {
-        // 1. WhatsApp verification check if enabled
+        // 1. WhatsApp verification check if enabled for personal numbers
         if (verifyWhatsApp && !jid.includes("@g.us") && typeof whatsappInstance.isOnWhatsApp === "function") {
           try {
             const check = await withTimeout(() => whatsappInstance.isOnWhatsApp(cleanPhone || jid), 15000, 'WhatsApp verification timed out');
@@ -470,7 +482,26 @@ class AutomationTools {
           }
         }
 
-        // 2. Personalize template + Spintax
+        // 2. WhatsApp group permission / membership pre-check
+        if (jid.includes("@g.us") && typeof whatsappInstance.canSendTo === "function") {
+          try {
+            const groupCheck = await whatsappInstance.canSendTo(jid);
+            if (groupCheck && !groupCheck.allowed) {
+              failedCount++;
+              console.log(`⚠️ [Anti-Ban Guard] Skipped restricted group: ${displayName} (${logIdentifier}) - ${groupCheck.reason}`);
+              await crmDB.logCampaignItem(campaignId, logIdentifier, "failed", groupCheck.reason);
+              const skippedStatus = AutomationTools.campaignState[campaignId] === 'cancelled' ? 'cancelled' : i === contacts.length - 1 ? "completed" : "running";
+              await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, skippedStatus);
+              emitProgress(skippedStatus);
+              if (skippedStatus === 'cancelled') break;
+              continue;
+            }
+          } catch (canSendErr) {
+            // Non-fatal check error, proceed to send
+          }
+        }
+
+        // 3. Personalize template + Spintax
         let personalizedMsg = template
           .replace(/{name}/g, displayName)
           .replace(/{phone}/g, logIdentifier);
@@ -479,7 +510,7 @@ class AutomationTools {
           personalizedMsg = AutomationTools.parseSpintax(personalizedMsg);
         }
 
-        // 3. Human typing simulation
+        // 4. Human typing simulation
         if (enableTyping && typeof whatsappInstance.simulateHumanTyping === "function") {
           const typingMs = Math.min(5000, Math.max(2000, Math.floor(personalizedMsg.length * 25)));
           try {
@@ -489,35 +520,25 @@ class AutomationTools {
           }
         }
 
-        // 4. Send Message
-          let imageBuffer = null;
-          if (imagePath) {
-            const fs = require("fs");
-            imageBuffer = fs.readFileSync(imagePath);
-          }
-          await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من وصولها قبل إعادة المحاولة');
-          sentCount++;
-          sentInCurrentBatch++;
-          await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
-        } catch (err) {
-          if (err.code === 'CAMPAIGN_TIMEOUT') {
-            console.error(`[Campaign] Delivery uncertain for ${logIdentifier}:`, err.message);
-            await crmDB.logCampaignItem(campaignId, logIdentifier || `target ${i + 1}`, 'uncertain', err.message);
-            await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, 'needs_review');
-            emitProgress('needs_review', { error: err.message, targetIndex: i + 1 });
-            break;
-          }
-          failedCount++;
-          console.error(`[Campaign] Failed sending to ${logIdentifier}:`, err.message);
-          await crmDB.logCampaignItem(campaignId, logIdentifier || `target ${i + 1}`, "failed", err.message);
-        }
+        // 5. Send Message
+        await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
+        sentCount++;
+        sentInCurrentBatch++;
+        await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
+      } catch (err) {
+        failedCount++;
+        const isTimeout = err.code === 'CAMPAIGN_TIMEOUT';
+        const errMsg = isTimeout ? (err.message || 'مهلة إرسال الرسالة انتهت') : err.message;
+        console.error(`[Campaign] Failed sending to ${logIdentifier}:`, errMsg);
+        await crmDB.logCampaignItem(campaignId, logIdentifier || `target ${i + 1}`, isTimeout ? 'timeout' : 'failed', errMsg);
+      }
 
-        const isLast = i === contacts.length - 1;
-        const currentStatus = AutomationTools.campaignState[campaignId] === 'cancelled' ? 'cancelled' : isLast ? "completed" : "running";
-        await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, currentStatus);
+      const isLast = i === contacts.length - 1;
+      const currentStatus = AutomationTools.campaignState[campaignId] === 'cancelled' ? 'cancelled' : isLast ? "completed" : "running";
+      await crmDB.updateCampaignProgress(campaignId, sentCount, failedCount, currentStatus);
 
-        emitProgress(currentStatus);
-        if (currentStatus === 'cancelled') break;
+      emitProgress(currentStatus);
+      if (currentStatus === 'cancelled') break;
 
         if (!isLast && !(batchSize > 0 && sentInCurrentBatch >= batchSize)) {
           // Anti-Ban Random Delay between minDelay and maxDelay

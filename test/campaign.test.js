@@ -60,18 +60,19 @@ test('a 58-target campaign finishes after four target failures', async () => {
     },
   }, {
     title: 'hung send', template: 'hello', contacts: ['hung@g.us', 'later@g.us'],
+    minDelay: 0.001, maxDelay: 0.001,
     enableTyping: false, verifyWhatsApp: false, batchSize: 0, sendTimeoutMs: 30,
   });
   await new Promise((resolve, reject) => {
-    const deadline = Date.now() + 1000;
+    const deadline = Date.now() + 2000;
     const poll = () => {
-      if (db.progress.at(-1)?.status === 'needs_review') resolve();
+      if (db.progress.at(-1)?.status === 'completed') resolve();
       else if (Date.now() > deadline) reject(new Error('hung send was not reported'));
       else setTimeout(poll, 10);
     };
     poll();
   });
-  assert.equal(laterTargetSent, false);
-  assert.equal(db.logs[0].status, 'uncertain');
-  assert.deepEqual(db.progress.at(-1), { sent: 0, failed: 0, status: 'needs_review' });
+  assert.equal(laterTargetSent, true);
+  assert.equal(db.logs[0].status, 'timeout');
+  assert.deepEqual(db.progress.at(-1), { sent: 1, failed: 1, status: 'completed' });
 });
