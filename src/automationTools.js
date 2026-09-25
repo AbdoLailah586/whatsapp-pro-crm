@@ -307,7 +307,7 @@ class AutomationTools {
     enableTyping = true,
     enableSpintax = true,
     verifyWhatsApp = true,
-    sendTimeoutMs = 35000,
+    sendTimeoutMs = 75000,
     ioEmitter = null
   }) {
     if (!whatsappInstance || !whatsappInstance.socket) {
@@ -524,11 +524,46 @@ class AutomationTools {
           }
         }
 
-        // 5. Send Message
-        await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer, preparedMedia), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
-        sentCount++;
-        sentInCurrentBatch++;
-        await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
+        // 5. Send Message with retry and verification
+        let sendSuccess = false;
+        try {
+          await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer, preparedMedia), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
+          sendSuccess = true;
+        } catch (firstErr) {
+          if (firstErr.code === 'CAMPAIGN_TIMEOUT') {
+            // Check if message was actually received by WhatsApp despite ack delay
+            try {
+              await new Promise((r) => setTimeout(r, 2000));
+              const recentMsgs = await crmDB.getMessages(jid, 5);
+              const justSent = (recentMsgs || []).find(
+                (m) => m.from_me === 1 && Math.abs(Date.now() - Number(m.timestamp)) < (sendTimeoutMs + 15000)
+              );
+              if (justSent) {
+                sendSuccess = true;
+                console.log(`[Campaign] Message confirmed delivered to ${logIdentifier} despite acknowledgment delay!`);
+              }
+            } catch (vErr) {}
+
+            // If still not confirmed, retry once
+            if (!sendSuccess) {
+              console.log(`[Campaign] Retrying send to ${logIdentifier} once...`);
+              try {
+                await withTimeout(() => whatsappInstance.sendMessage(jid, personalizedMsg, false, imageBuffer, preparedMedia), sendTimeoutMs, 'مهلة إرسال الرسالة انتهت؛ تأكد من اتصالك');
+                sendSuccess = true;
+              } catch (retryErr) {
+                throw retryErr;
+              }
+            }
+          } else {
+            throw firstErr;
+          }
+        }
+
+        if (sendSuccess) {
+          sentCount++;
+          sentInCurrentBatch++;
+          await crmDB.logCampaignItem(campaignId, logIdentifier, "sent");
+        }
       } catch (err) {
         failedCount++;
         const isTimeout = err.code === 'CAMPAIGN_TIMEOUT';

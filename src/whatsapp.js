@@ -92,6 +92,21 @@ class WhatsAppClient {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
+        cachedGroupMetadata: async (jid) => {
+          let meta = this.groupCache.get(jid);
+          if (!meta && this.socket && this.isConnected) {
+            try {
+              meta = await Promise.race([
+                this.socket.groupMetadata(jid),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
+              ]);
+              if (meta) this.groupCache.set(jid, meta);
+            } catch (e) {
+              meta = null;
+            }
+          }
+          return meta || undefined;
+        },
       });
 
       this.socket.ev.on("creds.update", async () => {
@@ -496,18 +511,16 @@ class WhatsAppClient {
     if (!jid || !jid.includes("@g.us")) return { allowed: true };
     try {
       let meta = this.groupCache.get(jid);
-      if (!meta && this.groupCache.size > 0) {
-        return { allowed: false, reason: "لست عضواً في هذه المجموعة أو تم مغادرتها" };
-      }
       if (!meta && this.socket && this.isConnected) {
         meta = await Promise.race([
           this.socket.groupMetadata(jid),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
         ]).catch(() => null);
         if (meta) this.groupCache.set(jid, meta);
       }
       if (!meta) {
-        return { allowed: false, reason: "لست عضواً في هذه المجموعة أو تم مغادرتها" };
+        // If metadata is not available yet, do not block the send - let socket.sendMessage try
+        return { allowed: true };
       }
       if (meta.announce) {
         const myJid = this.user?.id ? this.user.id.split(":")[0].split("@")[0] : null;
@@ -516,11 +529,7 @@ class WhatsAppClient {
           const pId = p.id ? p.id.split(":")[0].split("@")[0] : "";
           return (myJid && pId === myJid) || (myLid && pId === myLid);
         });
-        if (!myParticipant) {
-          return { allowed: false, reason: "لست عضواً في هذه المجموعة" };
-        }
-        const isAdm = myParticipant.admin === "admin" || myParticipant.admin === "superadmin";
-        if (!isAdm) {
+        if (myParticipant && !(myParticipant.admin === "admin" || myParticipant.admin === "superadmin")) {
           return { allowed: false, reason: "المجموعة مغلقة (النشر مسموح للمشرفين فقط)" };
         }
       }

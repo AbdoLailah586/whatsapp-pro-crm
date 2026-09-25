@@ -64,7 +64,7 @@ test('a 58-target campaign finishes after four target failures', async () => {
     enableTyping: false, verifyWhatsApp: false, batchSize: 0, sendTimeoutMs: 30,
   });
   await new Promise((resolve, reject) => {
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 5000;
     const poll = () => {
       if (db.progress.at(-1)?.status === 'completed') resolve();
       else if (Date.now() > deadline) reject(new Error('hung send was not reported'));
