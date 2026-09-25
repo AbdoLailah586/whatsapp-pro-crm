@@ -470,8 +470,14 @@ class WhatsAppClient {
     if (!jid || !jid.includes("@g.us")) return { allowed: true };
     try {
       let meta = this.groupCache.get(jid);
+      if (!meta && this.groupCache.size > 0) {
+        return { allowed: false, reason: "لست عضواً في هذه المجموعة أو تم مغادرتها" };
+      }
       if (!meta && this.socket && this.isConnected) {
-        meta = await this.socket.groupMetadata(jid).catch(() => null);
+        meta = await Promise.race([
+          this.socket.groupMetadata(jid),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+        ]).catch(() => null);
         if (meta) this.groupCache.set(jid, meta);
       }
       if (!meta) {
