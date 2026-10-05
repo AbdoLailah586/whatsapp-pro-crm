@@ -1525,7 +1525,7 @@ app.post("/api/settings/test-micromind", async (req, res) => {
     }
 
     console.log(`🧪 [Settings] Testing MicroMind API URL: ${testUrl}`);
-    const testQuestion = "مرحبا، هذا فحص اتصال تجريبي من منصة واتساب برو للتأكد من جاهزية سيرفر MicroMind.";
+    const testQuestion = req.body?.question || "مرحبا، هذا فحص اتصال تجريبي من منصة واتساب برو للتأكد من جاهزية سيرفر MicroMind.";
     const response = await fetch(testUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1533,7 +1533,7 @@ app.post("/api/settings/test-micromind", async (req, res) => {
         question: testQuestion,
         chatId: `test_probe_${Date.now()}`,
       }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (response.ok) {
