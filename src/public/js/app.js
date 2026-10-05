@@ -2071,6 +2071,24 @@
                 webhookRow("تدخّل بشري", o + "/api/tools/takeover") +
               "</div>" +
 
+              '<div class="tile tile-lg"><div class="tile-head" style="display:flex;justify-content:space-between;align-items:center;"><h4>وكيل الذكاء الاصطناعي (MicroMind AI Workflow)</h4><span id="mmStatusBadge"></span></div>' +
+                '<p class="faint" style="font-size:12px;margin-bottom:12px;">اربط حسابك بـ Workflow خاص بك على MicroMind (يدعم الـ RAG، قواعد المعرفة، والـ Tools الخاصة بنشاطك التجاري).</p>' +
+                '<div class="field"><label>رابط الـ Workflow (API Endpoint) الخاص بك</label>' +
+                  '<input type="text" id="setMicroMindUrl" dir="ltr" placeholder="https://core.aimicromind.com/api/v1/prediction/..." value="' +
+                  attr((S.settings && S.settings.customMicroMindApiUrl) || (S.settings && S.settings.microMindApiUrl) || "") + '">' +
+                  '<span class="help">اتركه فارغاً للاعتماد على الوكيل الافتراضي للمنصة.</span></div>' +
+                '<div class="field"><label>نمط الذكاء الاصطناعي (AI Engine)</label>' +
+                  '<select id="setAiMode">' +
+                    '<option value="micromind"' + ((!S.settings || !S.settings.aiMode || S.settings.aiMode === "micromind") ? " selected" : "") + '>🧠 وكيل MicroMind (يدعم RAG وأدوات العمل)</option>' +
+                    '<option value="flowise"' + (S.settings && S.settings.aiMode === "flowise" ? " selected" : "") + '>⚡ وكيل Flowise (النمط القديم)</option>' +
+                    '<option value="none"' + (S.settings && S.settings.aiMode === "none" ? " selected" : "") + '>🛑 إيقاف الرد الذكي</option>' +
+                  '</select></div>' +
+                '<div style="display:flex;gap:8px;align-items:center;margin-top:12px;">' +
+                  '<button class="btn btn-primary btn-sm" data-act="save-settings"><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button>' +
+                  '<button class="btn btn-sm" data-act="test-micromind" id="btnTestMicroMind"><i class="fa-solid fa-vial"></i> فحص الاتصال بالوكيل</button>' +
+                '</div>' +
+              "</div>" +
+
               '<div class="tile tile-lg"><div class="tile-head"><h4>Google Sheets</h4></div>' +
                 '<div class="field"><label>رابط الـ Webhook</label>' +
                   '<input type="text" id="setSheet" dir="ltr" placeholder="https://script.google.com/…" value="' +
@@ -2108,7 +2126,7 @@
                     '<button data-theme-set="light">فاتح</button>' +
                     '<button data-theme-set="dark">ليلي</button>' +
                     '<button data-theme-set="system">النظام</button>' +
-                  "</span></span></div>" +
+                  '</span></span></div>' +
                 '<button class="btn btn-danger btn-sm" data-act="logout" style="margin-top:12px">' +
                   '<i class="fa-solid fa-right-from-bracket"></i> فصل الجهاز</button>' +
               "</div>" +
@@ -2118,6 +2136,11 @@
       mount: function () {
         if (!S.groupsLoaded) fetchGroups();
         syncThemeSeg();
+        var mmInput = $("setMicroMindUrl");
+        if (mmInput) {
+          mmInput.addEventListener("input", updateMicroMindBadge);
+        }
+        updateMicroMindBadge();
       }
     };
   }
@@ -2530,6 +2553,10 @@
       }
       actionsHtml += '</div>';
 
+      var aiBadge = u.microMindApiUrl ?
+        '<span class="tag" style="background:rgba(34,197,94,0.15);color:#22c55e;font-size:10.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;" title="' + esc(u.microMindApiUrl) + '">🟢 مخصص</span>' :
+        '<span class="tag" style="background:rgba(100,116,139,0.15);color:var(--muted);font-size:10.5px;">⚙️ افتراضي</span>';
+
       return '<tr>' +
         '<td>' +
           '<div style="display:flex;align-items:center;gap:6px;">' +
@@ -2540,6 +2567,7 @@
         '<td>' + phoneLink + '</td>' +
         '<td>' + statusBadge + '</td>' +
         '<td>' + expiryHtml + '</td>' +
+        '<td>' + aiBadge + '</td>' +
         '<td>' + (u.notes ? ('<span style="font-size:11.5px;color:var(--ink-2);max-width:180px;display:inline-block;white-space:normal;">' + esc(u.notes) + '</span>') : '<span class="faint">—</span>') + '</td>' +
         '<td>' + actionsHtml + '</td>' +
       '</tr>';
@@ -2550,6 +2578,7 @@
       '<th>رقم الواتساب</th>' +
       '<th>الحالة</th>' +
       '<th>تاريخ الانتهاء</th>' +
+      '<th>وكيل AI</th>' +
       '<th>ملاحظات</th>' +
       '<th>إجراءات</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
@@ -2598,6 +2627,11 @@
         '</select>' +
       '</div>' +
       '<div class="field">' +
+        '<label>رابط MicroMind Workflow (اختياري للعميل)</label>' +
+        '<input type="text" id="admMicroMindUrl" dir="ltr" placeholder="https://core.aimicromind.com/api/v1/prediction/..." value="' + esc(userToEdit ? (userToEdit.microMindApiUrl || "") : "") + '">' +
+        '<span style="font-size:11px;color:var(--muted);">اتركه فارغاً ليستخدم العميل الوكيل الافتراضي للمنصة.</span>' +
+      '</div>' +
+      '<div class="field">' +
         '<label>ملاحظات خاصة بالإدارة</label>' +
         '<textarea id="admNotes" rows="2" placeholder="ملاحظات الاشتراك، قيمة الباقة، تاريخ الدفع...">' + esc(userToEdit ? (userToEdit.notes || "") : "") + '</textarea>' +
       '</div>';
@@ -2631,6 +2665,7 @@
         var password = $("admPassword").value.trim();
         var status = $("admStatus").value;
         var notes = $("admNotes").value.trim();
+        var microMindApiUrl = $("admMicroMindUrl") ? $("admMicroMindUrl").value.trim() : "";
 
         if (!isEdit && !phone) return toast("رقم الهاتف أو البريد الإلكتروني مطلوب.", "warn");
         if (!isEdit && (!password || password.length < 6)) return toast("كلمة المرور يجب ألا تقل عن 6 أحرف.", "warn");
@@ -2639,7 +2674,8 @@
         var payload = {
           displayName: displayName,
           notes: notes,
-          status: status
+          status: status,
+          microMindApiUrl: microMindApiUrl
         };
 
         if (password) payload.password = password;
@@ -2824,6 +2860,11 @@
         fetchSettings().then(function () {
           var f = $("setSheet");
           if (f && S.settings) f.value = S.settings.googleSheetWebhookUrl || "";
+          var mm = $("setMicroMindUrl");
+          if (mm && S.settings) mm.value = S.settings.customMicroMindApiUrl || S.settings.microMindApiUrl || "";
+          var aim = $("setAiMode");
+          if (aim && S.settings && S.settings.aiMode) aim.value = S.settings.aiMode;
+          updateMicroMindBadge();
         });
       } else if (view === "export") {
         replaceStack([exportPanel()]);
@@ -3102,6 +3143,7 @@
       case "save-notes": saveNotes(); break;
       case "save-profile": saveProfile(); break;
       case "save-settings": saveSettings(); break;
+      case "test-micromind": testMicroMind(el || $("btnTestMicroMind")); break;
       case "export": doExport(el); break;
       case "logout": doLogout(); break;
       case "website-logout": doWebsiteLogout(); break;
@@ -3222,13 +3264,78 @@
   }
 
   function saveSettings() {
+    var sheetUrl = $("setSheet") ? $("setSheet").value.trim() : "";
+    var mmUrl = $("setMicroMindUrl") ? $("setMicroMindUrl").value.trim() : "";
+    var aiMode = $("setAiMode") ? $("setAiMode").value : "micromind";
+
     api("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ googleSheetWebhookUrl: $("setSheet").value.trim() })
+      body: JSON.stringify({
+        googleSheetWebhookUrl: sheetUrl,
+        microMindApiUrl: mmUrl,
+        aiMode: aiMode
+      })
     }).then(function (d) {
-      if (d && d.success) toast("الإعدادات اتحفظت", "ok");
-      else toast("فشل الحفظ", "danger");
+      if (d && d.success) {
+        if (!S.settings) S.settings = {};
+        S.settings.googleSheetWebhookUrl = sheetUrl;
+        S.settings.microMindApiUrl = d.settings ? d.settings.microMindApiUrl : (mmUrl || S.settings.defaultMicroMindApiUrl);
+        S.settings.customMicroMindApiUrl = d.settings ? d.settings.customMicroMindApiUrl : mmUrl;
+        S.settings.aiMode = d.settings ? d.settings.aiMode : aiMode;
+        updateMicroMindBadge();
+        toast("تم حفظ إعدادات الحساب ووكيل الذكاء الاصطناعي بنجاح!", "ok");
+      } else {
+        toast((d && d.error) || "فشل الحفظ", "danger");
+      }
+    }).catch(function (err) {
+      toast(err.message, "danger");
     });
+  }
+
+  function testMicroMind(btn) {
+    var url = $("setMicroMindUrl") ? $("setMicroMindUrl").value.trim() : "";
+    if (btn) btn.disabled = true;
+    var origText = btn ? btn.innerHTML : "";
+    if (btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري فحص الوكيل...';
+
+    api("/api/settings/test-micromind", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ microMindApiUrl: url })
+    }).then(function (res) {
+      if (res && res.success) {
+        var msg = "الاتصال بوكيل الذكاء الاصطناعي ناجح وسليم!";
+        if (res.sampleReply) {
+          msg += " رد الوكيل: " + (res.sampleReply.length > 60 ? res.sampleReply.substring(0, 60) + "..." : res.sampleReply);
+        }
+        toast(msg, "ok");
+      } else {
+        toast((res && res.error) || "تعذر الاتصال برابط الوكيل المحدد", "danger");
+      }
+    }).catch(function (err) {
+      toast("خطأ في فحص الوكيل: " + err.message, "danger");
+    }).finally(function () {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    });
+  }
+
+  function updateMicroMindBadge() {
+    var badge = $("mmStatusBadge");
+    var input = $("setMicroMindUrl");
+    if (!badge) return;
+    var val = input ? input.value.trim() : "";
+    var defaultUrl = (S.settings && (S.settings.defaultMicroMindApiUrl || S.settings.systemDefaultMicroMindApiUrl)) || "";
+
+    if (val) {
+      badge.innerHTML = '<span class="badge" style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);padding:3px 8px;border-radius:6px;font-size:11px;">🟢 رابط مخصص للعميل</span>';
+    } else if (defaultUrl) {
+      badge.innerHTML = '<span class="badge" style="background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);padding:3px 8px;border-radius:6px;font-size:11px;">⚙️ شغال على الوكيل العام للمنصة</span>';
+    } else {
+      badge.innerHTML = '<span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);padding:3px 8px;border-radius:6px;font-size:11px;">⚠️ لم يتم تحديد رابط وكيل</span>';
+    }
   }
 
   function doExport(btn) {

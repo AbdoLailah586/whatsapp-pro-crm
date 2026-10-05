@@ -26,3 +26,7 @@ Thumbs.db
 .tempmediaStorage/
 .user_uploaded/
 *.apk
+.neon
+.agents/
+.codex/
+skills-lock.json

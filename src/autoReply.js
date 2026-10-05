@@ -45,8 +45,14 @@ class AutoReplyEngine {
     if (!settings.botEnabled || (!text && (!uploads || uploads.length === 0))) return null;
     const cleanText = (text || "").trim();
 
-    // 1. Check if MicroMind AI Mode is active for this account
-    if (settings.aiMode === "micromind" && settings.microMindApiUrl) {
+    // 1. Resolve MicroMind AI workflow URL (Tenant custom URL > System default env > Config)
+    const microMindUrl = (settings.microMindApiUrl && settings.microMindApiUrl.trim())
+      || process.env.MICROMIND_API_URL
+      || "";
+
+    const isMicroMindActive = (settings.aiMode === "micromind" || (!settings.aiMode && !!microMindUrl)) && !!microMindUrl;
+
+    if (isMicroMindActive) {
       try {
         const isAudioUpload = uploads && uploads.length > 0 && uploads.some(u => u.type === "audio");
 
@@ -94,7 +100,8 @@ class AutoReplyEngine {
           payload.uploads = uploads;
         }
 
-        const response = await fetch(settings.microMindApiUrl, {
+        console.log(`🤖 [AutoReply] Calling MicroMind workflow: ${microMindUrl} for ${senderId}...`);
+        const response = await fetch(microMindUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),

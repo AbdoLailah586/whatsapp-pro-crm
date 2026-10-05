@@ -388,6 +388,7 @@ class CRMDatabase {
         expires_at INTEGER,
         phone TEXT,
         notes TEXT,
+        micro_mind_api_url TEXT,
         created_at INTEGER
       );
     `);
@@ -397,6 +398,7 @@ class CRMDatabase {
     try { db.exec(`ALTER TABLE platform_users ADD COLUMN expires_at INTEGER;`); } catch (e) {}
     try { db.exec(`ALTER TABLE platform_users ADD COLUMN phone TEXT;`); } catch (e) {}
     try { db.exec(`ALTER TABLE platform_users ADD COLUMN notes TEXT;`); } catch (e) {}
+    try { db.exec(`ALTER TABLE platform_users ADD COLUMN micro_mind_api_url TEXT;`); } catch (e) {}
     try {
       db.prepare(`UPDATE platform_users SET is_admin = 1, status = 'active' WHERE id = 'legacy' OR email LIKE '%01554826209%' OR email LIKE '%abdolailah586%'`).run();
     } catch (e) {}
@@ -419,12 +421,15 @@ class CRMDatabase {
           expires_at BIGINT,
           phone TEXT,
           notes TEXT,
+          micro_mind_api_url TEXT,
           created_at BIGINT
         );
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS expires_at BIGINT;
         ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS phone TEXT;
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS notes TEXT;
+        ALTER TABLE public.platform_users ADD COLUMN IF NOT EXISTS micro_mind_api_url TEXT;
         CREATE TABLE IF NOT EXISTS public.baileys_auth_store (
           user_id TEXT NOT NULL,
           key TEXT NOT NULL,
@@ -1558,19 +1563,60 @@ class CRMDatabase {
 
   async getBotSettings() {
     const raw = await this.kvGet("bot_settings");
-    const defaults = { botEnabled: true, aiMode: "", microMindApiUrl: "", googleSheetWebhookUrl: "" };
-    if (!raw) return defaults;
-    try {
-      return { ...defaults, ...JSON.parse(raw) };
-    } catch (e) {
-      return defaults;
+    const cfg = loadConfig();
+    const defaultApiUrl = process.env.MICROMIND_API_URL || cfg.microMindApiUrl || "";
+    const defaults = {
+      botEnabled: true,
+      aiMode: "micromind",
+      microMindApiUrl: "",
+      googleSheetWebhookUrl: ""
+    };
+
+    let userApiUrl = "";
+    const uid = currentUserId();
+    if (uid) {
+      try {
+        const u = await this.getUserById(uid);
+        if (u && (u.micro_mind_api_url || u.microMindApiUrl)) {
+          userApiUrl = u.micro_mind_api_url || u.microMindApiUrl;
+        }
+      } catch (e) {}
     }
+
+    let parsed = {};
+    if (raw) {
+      try { parsed = JSON.parse(raw); } catch (e) {}
+    }
+
+    const customUrl = (parsed.microMindApiUrl !== undefined && parsed.microMindApiUrl !== null && String(parsed.microMindApiUrl).trim() !== "")
+      ? String(parsed.microMindApiUrl).trim()
+      : (userApiUrl || "");
+
+    return {
+      ...defaults,
+      ...parsed,
+      microMindApiUrl: customUrl || defaultApiUrl,
+      customMicroMindApiUrl: customUrl,
+      defaultMicroMindApiUrl: defaultApiUrl,
+    };
   }
 
   async setBotSettings(partial) {
     const current = await this.getBotSettings();
     const updated = { ...current, ...partial };
-    await this.kvSet("bot_settings", JSON.stringify(updated));
+    const uid = currentUserId();
+
+    if (uid && partial.microMindApiUrl !== undefined) {
+      try {
+        await this.updateUser(uid, { microMindApiUrl: partial.microMindApiUrl });
+      } catch (e) {}
+    }
+
+    const toSave = { ...updated };
+    delete toSave.customMicroMindApiUrl;
+    delete toSave.defaultMicroMindApiUrl;
+
+    await this.kvSet("bot_settings", JSON.stringify(toSave));
     return updated;
   }
 
@@ -1825,25 +1871,25 @@ class CRMDatabase {
     return this._legacySqliteDb.prepare("SELECT COUNT(*) as count FROM platform_users").get().count;
   }
 
-  async createUser({ id, email, passwordHash, displayName, isAdmin = false, status = "active", expiresAt = null, phone = "", notes = "" }) {
+  async createUser({ id, email, passwordHash, displayName, isAdmin = false, status = "active", expiresAt = null, phone = "", notes = "", microMindApiUrl = "" }) {
     const now = Date.now();
     const cleanEmail = email.toLowerCase().trim();
     if (this.isPostgres) {
       const client = await this.pgPool.connect();
       try {
         await client.query(
-          "INSERT INTO public.platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-          [id, cleanEmail, passwordHash, displayName || "", !!isAdmin, status || "active", expiresAt || null, phone || "", notes || "", now]
+          "INSERT INTO public.platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, micro_mind_api_url, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+          [id, cleanEmail, passwordHash, displayName || "", !!isAdmin, status || "active", expiresAt || null, phone || "", notes || "", microMindApiUrl || "", now]
         );
       } finally {
         client.release();
       }
     } else {
       this._legacySqliteDb.prepare(
-        "INSERT INTO platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
-      ).run(id, cleanEmail, passwordHash, displayName || "", isAdmin ? 1 : 0, status || "active", expiresAt || null, phone || "", notes || "", now);
+        "INSERT INTO platform_users (id, email, password_hash, display_name, is_admin, status, expires_at, phone, notes, micro_mind_api_url, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+      ).run(id, cleanEmail, passwordHash, displayName || "", isAdmin ? 1 : 0, status || "active", expiresAt || null, phone || "", notes || "", microMindApiUrl || "", now);
     }
-    return { id, email: cleanEmail, displayName: displayName || "", isAdmin: !!isAdmin, status, expiresAt, phone, notes, createdAt: now };
+    return { id, email: cleanEmail, displayName: displayName || "", isAdmin: !!isAdmin, status, expiresAt, phone, notes, microMindApiUrl: microMindApiUrl || "", createdAt: now };
   }
 
   async getAllUsers() {
@@ -1851,26 +1897,30 @@ class CRMDatabase {
       const client = await this.pgPool.connect();
       try {
         const res = await client.query(
-          "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, created_at FROM public.platform_users ORDER BY created_at DESC"
+          "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, micro_mind_api_url, created_at FROM public.platform_users ORDER BY created_at DESC"
         );
         return res.rows.map(r => ({
           ...r,
           is_admin: !!r.is_admin,
           expires_at: r.expires_at ? Number(r.expires_at) : null,
-          created_at: Number(r.created_at)
+          created_at: Number(r.created_at),
+          micro_mind_api_url: r.micro_mind_api_url || "",
+          microMindApiUrl: r.micro_mind_api_url || ""
         }));
       } finally {
         client.release();
       }
     }
     const rows = this._legacySqliteDb.prepare(
-      "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, created_at FROM platform_users ORDER BY created_at DESC"
+      "SELECT id, email, display_name, is_admin, status, expires_at, phone, notes, micro_mind_api_url, created_at FROM platform_users ORDER BY created_at DESC"
     ).all();
     return rows.map(r => ({
       ...r,
       is_admin: !!r.is_admin,
       expires_at: r.expires_at ? Number(r.expires_at) : null,
-      created_at: Number(r.created_at)
+      created_at: Number(r.created_at),
+      micro_mind_api_url: r.micro_mind_api_url || "",
+      microMindApiUrl: r.micro_mind_api_url || ""
     }));
   }
 
@@ -1909,6 +1959,10 @@ class CRMDatabase {
     if (updates.isAdmin !== undefined) {
       fields.push(this.isPostgres ? `is_admin = $${idx++}` : "is_admin = ?");
       values.push(this.isPostgres ? !!updates.isAdmin : (updates.isAdmin ? 1 : 0));
+    }
+    if (updates.microMindApiUrl !== undefined) {
+      fields.push(this.isPostgres ? `micro_mind_api_url = $${idx++}` : "micro_mind_api_url = ?");
+      values.push(updates.microMindApiUrl || "");
     }
 
     if (fields.length === 0) return user;

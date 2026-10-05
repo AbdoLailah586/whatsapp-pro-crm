@@ -225,7 +225,10 @@ class BookingEngine {
 
       // Sync to Google Sheets via MicroMind Workflow Tool (or webhook fallback)
       const config = loadConfig();
-      if (config.microMindApiUrl) {
+      const tenantSettings = await crmDB.getBotSettings().catch(() => ({}));
+      const microMindUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL || config.microMindApiUrl;
+
+      if (microMindUrl) {
         try {
           const dateFormatted = new Date(bookingRecord.startTime).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" });
           const sheetPrompt = `[طلب تسجيل حجز موعد في Google Sheets]:
@@ -238,7 +241,7 @@ class BookingEngine {
 - ملاحظات: ${bookingRecord.notes || 'لا توجد'}
 - الحالة: مؤكد (CONFIRMED)`;
 
-          fetch(config.microMindApiUrl, {
+          fetch(microMindUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

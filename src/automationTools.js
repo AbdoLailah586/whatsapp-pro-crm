@@ -57,7 +57,10 @@ class AutomationTools {
       };
 
       // Sync to Google Sheets via MicroMind Workflow Tool (or fallback webhook)
-      if (config.microMindApiUrl) {
+      const tenantSettings = await crmDB.getBotSettings().catch(() => ({}));
+      const microMindUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL || config.microMindApiUrl;
+
+      if (microMindUrl) {
         try {
           const sheetPrompt = `[طلب تسجيل في Google Sheets]:
 يرجى استخدام أداة Google Sheets (Append Row / Values) لتسجيل بيانات هذا الطلب الجديد في جدول الطلبات:
@@ -68,7 +71,7 @@ class AutomationTools {
 - السعر الإجمالي: ${orderData.totalPrice} EGP
 - تاريخ ووقت التسجيل: ${orderData.createdAt}`;
 
-          fetch(config.microMindApiUrl, {
+          fetch(microMindUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -209,14 +212,18 @@ class AutomationTools {
 
       // 1. Try fetching high-quality OpenAI TTS voice directly from MicroMind Chatflow
       const config = loadConfig();
-      if (config.aiMode === "micromind" && config.microMindApiUrl) {
+      const tenantSettings = await crmDB.getBotSettings().catch(() => ({}));
+      const microMindUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL || config.microMindApiUrl;
+      const isMicroMindActive = tenantSettings.aiMode === "micromind" || (!tenantSettings.aiMode && !!microMindUrl) || config.aiMode === "micromind";
+
+      if (isMicroMindActive && microMindUrl) {
         try {
           console.log("🎙️ [VoiceNote] Generating high-quality voice via MicroMind (OpenAI TTS-1-HD)...");
           const payload = {
             question: `كرر هذا النص حرفياً وبدقة تامة كلمة بكلمة فقط دون أي تحية أو إضافة أو إعادة صياغة أو زيادة:\n${text}`,
             chatId: `voice_verbatim_${Date.now()}`,
           };
-          const res = await fetch(config.microMindApiUrl, {
+          const res = await fetch(microMindUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),

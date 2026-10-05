@@ -340,6 +340,7 @@ adminRouter.get("/users", async (req, res) => {
         expiresAt,
         daysRemaining,
         notes: u.notes || "",
+        microMindApiUrl: u.microMindApiUrl || u.micro_mind_api_url || "",
         createdAt: u.created_at ? Number(u.created_at) : null,
       };
     });
@@ -363,7 +364,7 @@ adminRouter.get("/users", async (req, res) => {
 // 2. Create a new client account
 adminRouter.post("/users", async (req, res) => {
   try {
-    let { email, password, displayName, phone, durationDays, expiresAt, notes, isAdmin } = req.body || {};
+    let { email, password, displayName, phone, durationDays, expiresAt, notes, isAdmin, microMindApiUrl } = req.body || {};
     email = String(email || "").trim();
     if (!email) {
       return res.status(400).json({ error: "البريد الإلكتروني أو رقم الهاتف مطلوب." });
@@ -403,7 +404,18 @@ adminRouter.post("/users", async (req, res) => {
       expiresAt: finalExpiresAt,
       phone: phone || null,
       notes: notes || null,
+      microMindApiUrl: microMindApiUrl ? String(microMindApiUrl).trim() : "",
     });
+
+    if (microMindApiUrl) {
+      await runAsTenant(id, async () => {
+        await crmDB.setBotSettings({
+          microMindApiUrl: String(microMindApiUrl).trim(),
+          aiMode: "micromind",
+          botEnabled: true,
+        });
+      });
+    }
 
     res.json({
       success: true,
@@ -416,6 +428,7 @@ adminRouter.post("/users", async (req, res) => {
         isAdmin: user.isAdmin,
         status: user.status,
         expiresAt: user.expiresAt,
+        microMindApiUrl: user.microMindApiUrl,
       },
     });
   } catch (err) {
@@ -428,7 +441,7 @@ adminRouter.post("/users", async (req, res) => {
 adminRouter.patch("/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { displayName, phone, notes, status, expiresAt, password } = req.body;
+    const { displayName, phone, notes, status, expiresAt, password, microMindApiUrl } = req.body;
 
     const updates = {};
     if (displayName !== undefined) updates.displayName = displayName;
@@ -439,8 +452,21 @@ adminRouter.patch("/users/:id", async (req, res) => {
     if (password && String(password).length >= 6) {
       updates.passwordHash = await hashPassword(password);
     }
+    if (microMindApiUrl !== undefined) {
+      updates.microMindApiUrl = String(microMindApiUrl || "").trim();
+    }
 
     const updated = await crmDB.updateUser(id, updates);
+
+    if (microMindApiUrl !== undefined) {
+      await runAsTenant(id, async () => {
+        await crmDB.setBotSettings({
+          microMindApiUrl: String(microMindApiUrl || "").trim(),
+          aiMode: microMindApiUrl ? "micromind" : undefined,
+        });
+      });
+    }
+
     res.json({ success: true, message: "تم تحديث بيانات الحساب بنجاح.", user: updated });
   } catch (err) {
     console.error("[Admin] PATCH /users/:id error:", err);
@@ -1413,7 +1439,15 @@ app.get("/api/settings", async (req, res) => {
     delete safeConfig.autoReplyRules; // now per-account, served via /api/rules
 
     const tenantSettings = await autoReplyEngine.getSettings();
-    res.json({ success: true, settings: { ...safeConfig, ...tenantSettings } });
+    const systemDefaultUrl = process.env.MICROMIND_API_URL || config.microMindApiUrl || "";
+    res.json({
+      success: true,
+      settings: {
+        ...safeConfig,
+        ...tenantSettings,
+        systemDefaultMicroMindApiUrl: systemDefaultUrl,
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1427,11 +1461,23 @@ app.post("/api/settings", async (req, res) => {
     const globalUpdates = {};
     for (const key of Object.keys(updates)) {
       if (tenantFields.includes(key)) tenantUpdates[key] = updates[key];
-      else globalUpdates[key] = updates[key];
+      else if (req.isAdmin) globalUpdates[key] = updates[key];
+    }
+
+    if (tenantUpdates.microMindApiUrl !== undefined) {
+      tenantUpdates.microMindApiUrl = String(tenantUpdates.microMindApiUrl || "").trim();
+      if (tenantUpdates.microMindApiUrl && !tenantUpdates.aiMode) {
+        tenantUpdates.aiMode = "micromind";
+      }
     }
 
     if (Object.keys(tenantUpdates).length > 0) {
       await crmDB.setBotSettings(tenantUpdates);
+      if (tenantUpdates.microMindApiUrl !== undefined && req.userId) {
+        try {
+          await crmDB.updateUser(req.userId, { microMindApiUrl: tenantUpdates.microMindApiUrl });
+        } catch (e) {}
+      }
     }
 
     if (Object.keys(globalUpdates).length > 0) {
@@ -1447,9 +1493,61 @@ app.post("/api/settings", async (req, res) => {
     if (safeConfig.emailPass) safeConfig.emailPass = "••••••••";
     delete safeConfig.autoReplyRules;
     const tenantSettings = await autoReplyEngine.getSettings();
-    res.json({ success: true, settings: { ...safeConfig, ...tenantSettings } });
+    const systemDefaultUrl = process.env.MICROMIND_API_URL || config.microMindApiUrl || "";
+    res.json({
+      success: true,
+      settings: {
+        ...safeConfig,
+        ...tenantSettings,
+        systemDefaultMicroMindApiUrl: systemDefaultUrl,
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Endpoint to quickly test the MicroMind API connection
+app.post("/api/settings/test-micromind", async (req, res) => {
+  try {
+    let testUrl = req.body?.url;
+    if (!testUrl) {
+      const tenantSettings = await autoReplyEngine.getSettings();
+      testUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL;
+    }
+    testUrl = String(testUrl || "").trim();
+    if (!testUrl || !testUrl.startsWith("http")) {
+      return res.status(400).json({ success: false, error: "يرجى إدخال رابط API صالح يبدأ بـ http:// أو https://" });
+    }
+
+    console.log(`🧪 [Settings] Testing MicroMind API URL: ${testUrl}`);
+    const testQuestion = "مرحبا، هذا فحص اتصال تجريبي من منصة واتساب برو للتأكد من جاهزية سيرفر MicroMind.";
+    const response = await fetch(testUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: testQuestion,
+        chatId: `test_probe_${Date.now()}`,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return res.json({
+        success: true,
+        message: "تم الاتصال بنجاح بـ MicroMind Workflow!",
+        sampleReply: data.text ? data.text.slice(0, 160) + "..." : "تم الاتصال بنجاح",
+      });
+    } else {
+      const errText = await response.text();
+      return res.status(400).json({
+        success: false,
+        error: `استجاب السيرفر برمز (${response.status}): ${errText.slice(0, 180)}`,
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, error: `فشل الاتصال: ${err.message}` });
   }
 });
 
