@@ -136,11 +136,16 @@ class CRMDatabase {
     const client = await this.pgPool.connect();
     try {
       await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-      await client.query(`SET search_path TO "${schema}"`);
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL search_path TO "${schema}"`);
       await this._createPgTables(client);
+      await client.query("COMMIT");
       this._pgSchemasInitialized.add(schema);
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      console.error(`[Database] Error ensuring PG schema ${schema}:`, e.message);
+      throw e;
     } finally {
-      try { await client.query("RESET search_path"); } catch (e) {}
       client.release();
     }
   }

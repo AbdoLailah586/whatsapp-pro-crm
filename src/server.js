@@ -1510,10 +1510,14 @@ app.post("/api/settings", async (req, res) => {
 // Endpoint to quickly test the MicroMind API connection
 app.post("/api/settings/test-micromind", async (req, res) => {
   try {
-    let testUrl = req.body?.url;
+    let testUrl = req.body?.microMindApiUrl || req.body?.url;
     if (!testUrl) {
-      const tenantSettings = await autoReplyEngine.getSettings();
-      testUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL;
+      try {
+        const tenantSettings = await autoReplyEngine.getSettings();
+        testUrl = tenantSettings.microMindApiUrl || process.env.MICROMIND_API_URL;
+      } catch (e) {
+        testUrl = process.env.MICROMIND_API_URL;
+      }
     }
     testUrl = String(testUrl || "").trim();
     if (!testUrl || !testUrl.startsWith("http")) {
